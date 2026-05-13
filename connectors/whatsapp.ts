@@ -23,6 +23,7 @@ import makeWASocket, {
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
+  SyncState,
 } from "baileys"
 import { Boom } from "@hapi/boom"
 import * as qrcode from "qrcode-terminal"
@@ -176,7 +177,7 @@ class WhatsAppConnector extends BaseConnector<ChatSession> {
 
     // Handle connection updates
     this.sock.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect, qr } = update
+      const { connection, lastDisconnect, qr, receivedPendingNotifications } = update
 
       if (qr) {
         console.log("\n=== Scan this QR code with WhatsApp ===\n")
@@ -204,6 +205,10 @@ class WhatsAppConnector extends BaseConnector<ChatSession> {
         console.log(`  My number: ${this.myNumber}`)
         this.log("Listening for messages...")
       }
+
+      if (receivedPendingNotifications) {
+        this.log("Initial sync complete (received all pending notifications).")
+      }
     })
 
     // Save credentials on update
@@ -211,7 +216,17 @@ class WhatsAppConnector extends BaseConnector<ChatSession> {
 
     // Handle incoming messages
     this.sock.ev.on("messages.upsert", async ({ messages, type }) => {
+      if (type !== "notify") {
+        if (type === "append") {
+          this.log(`Ignoring history sync messages (type: ${type})`)
+        } else {
+          this.log(`Ignoring non-notify upsert (type: ${type})`)
+        }
+        return
+      }
+
       for (const msg of messages) {
+
         await this.handleMessage(msg)
       }
     })
@@ -283,10 +298,9 @@ class WhatsAppConnector extends BaseConnector<ChatSession> {
 
     // Guard against concurrent queries on the same session
     if (this.isQueryActive(chatId)) {
-      await this.sendMessage(chatId, "A request is already running. Please wait for it to finish.")
-      return
+      this.log(`[ABORT] New query from ${phoneNumber}, aborting previous...`)
+      this.abortQuery(chatId)
     }
-    this.markQueryActive(chatId)
 
     // Get or create session
     const session = await this.getOrCreateSession(chatId, (client) =>
@@ -298,10 +312,17 @@ class WhatsAppConnector extends BaseConnector<ChatSession> {
       return
     }
 
-    // Update session stats
-    session.messageCount++
-    session.lastActivity = new Date()
-    session.inputChars += query.length
+    this.markQueryActive(chatId, () => {
+      this.log(`[ABORT-EXEC] Disconnecting ACP client for ${chatId}`)
+      session.client.disconnect()
+    })
+
+    try {
+      // Update session stats
+      session.messageCount++
+      session.lastActivity = new Date()
+      session.inputChars += query.length
+
 
     const client = session.client
 

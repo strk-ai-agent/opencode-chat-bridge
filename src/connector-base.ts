@@ -337,7 +337,7 @@ export abstract class BaseConnector<TSession extends BaseSession> {
   protected config: ConnectorConfig
   private eventDeduplicator: EventDeduplicator
   /** Session IDs with an in-flight query -- never evict these */
-  protected activeQueries = new Set<string>()
+  protected activeQueries = new Map<string, { abort: () => void }>()
   private allowedUsers: Set<string> | null = null
   private expiryInterval: NodeJS.Timeout | null = null
   
@@ -442,10 +442,11 @@ export abstract class BaseConnector<TSession extends BaseSession> {
   
   /**
    * Mark a session as having an active query.
-   * Call before starting prompt processing.
+   * @param sessionId Session ID
+   * @param abortFn Optional callback to abort the query
    */
-  protected markQueryActive(sessionId: string): void {
-    this.activeQueries.add(sessionId)
+  protected markQueryActive(sessionId: string, abortFn: () => void = () => {}): void {
+    this.activeQueries.set(sessionId, { abort: abortFn })
   }
   
   /**
@@ -454,6 +455,17 @@ export abstract class BaseConnector<TSession extends BaseSession> {
    */
   protected markQueryDone(sessionId: string): void {
     this.activeQueries.delete(sessionId)
+  }
+
+  /**
+   * Abort an active query for the given session.
+   */
+  protected abortQuery(sessionId: string): void {
+    const active = this.activeQueries.get(sessionId)
+    if (active) {
+      active.abort()
+      this.activeQueries.delete(sessionId)
+    }
   }
   
   // ---------------------------------------------------------------------------
