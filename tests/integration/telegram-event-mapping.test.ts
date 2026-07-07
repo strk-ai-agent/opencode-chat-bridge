@@ -228,8 +228,10 @@ describe("telegram event mapping integration", () => {
     )
     expect(a.sessionId).toBe(b.sessionId)
     expect(a.sessionId).toBe("-1001")
-    // messageThreadId is preserved on the context -- the connector decides
-    // whether to use it based on threadIsolation.
+    // messageThreadId is always preserved on the context. The connector
+    // uses it to pin replies to the originating topic regardless of
+    // threadIsolation; threadIsolation only controls how the session key
+    // is derived (chatId vs chatId:messageThreadId).
     expect(a.messageThreadId).toBe(5)
     expect(b.messageThreadId).toBe(6)
   })

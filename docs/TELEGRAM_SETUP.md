@@ -149,12 +149,15 @@ is an independent sub-chat identified by `message_thread_id`.
 
 - `threadIsolation: true` (default): sessions are keyed on
   `${chatId}:${messageThreadId}`. Each topic has its own conversation history.
-  Replies are posted inside the topic using Telegram's `message_thread_id`
-  parameter, so the bot's response stays grouped with the conversation.
 - `threadIsolation: false`: one session per `chatId`. All topics in the
-  supergroup share conversation history. Replies in groups use
-  `reply_to_message_id` for visual continuity; topics are still respected if
-  the original message was in one.
+  supergroup share conversation history.
+
+In both cases, **replies are always posted inside the topic the user wrote
+from** (using `message_thread_id`). `threadIsolation` only controls SESSION
+keying -- reply routing is independent, because Telegram users expect the
+bot's response where they asked. Without this, replies in a topic would land
+in the supergroup's general chat root and be invisible to anyone navigating
+the forum.
 
 ### File uploads
 

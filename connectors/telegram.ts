@@ -47,7 +47,7 @@ import {
 // =============================================================================
 
 const config = getConfig()
-const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || ""
+const TG_TOKEN = process.env.TELEGRAM_BOT_TOKEN || config.telegram.token || ""
 const TRIGGER = process.env.TELEGRAM_TRIGGER || config.trigger
 const BOT_NAME = config.botName
 const RATE_LIMIT_SECONDS = config.rateLimitSeconds
@@ -406,6 +406,11 @@ export class TelegramConnector extends BaseConnector<ChatSession> {
   /**
    * Send a reply, pinning to the originating forum topic or replying to the
    * originating message when applicable. Mirrors Mattermost's `sendReply()`.
+   *
+   * Note: replies are always posted inside the topic the user wrote from
+   * (when messageThreadId is set), regardless of `threadIsolation`. That
+   * setting only controls SESSION keying -- reply routing is independent
+   * because Telegram users expect responses where they asked.
    */
   private async sendReply(context: TelegramEventContext, text: string): Promise<void> {
     const chunks = this.splitMessage(text, MAX_MESSAGE_LENGTH)
@@ -413,12 +418,13 @@ export class TelegramConnector extends BaseConnector<ChatSession> {
       const chunk = chunks[i]
       // The first chunk keeps the reply/reference; later chunks are plain
       const body: Record<string, unknown> = { chat_id: context.chatId, text: chunk }
-      if (this.threadIsolation && context.messageThreadId !== null) {
+      if (context.messageThreadId !== null) {
+        // Always pin to the originating topic -- otherwise the response
+        // would land in the supergroup's general chat root, which is
+        // surprising for users navigating a forum.
         body.message_thread_id = context.messageThreadId
       } else if (i === 0 && context.replyToMessageId !== null && !context.isPrivate) {
         body.reply_to_message_id = context.replyToMessageId
-        // reply_to_message_id is not allowed in forum topics; also drop it
-        // when threading otherwise.
       }
       try {
         await tgApi("sendMessage", body)
@@ -657,169 +663,179 @@ export class TelegramConnector extends BaseConnector<ChatSession> {
       await this.sendReply(context, "A request is already running. Please wait for it to finish.")
       return
     }
-    this.markQueryActive(context.sessionId)
 
-    const session = await this.getOrCreateSession(context.sessionId, (client) =>
-      this.createSession(client)
-    )
-    if (!session) {
-      await this.sendReply(context, CommandHandler.formatConnectionErrorMessage())
-      return
-    }
-
-    session.messageCount++
-    session.lastActivity = new Date()
-    session.inputChars += query.length
-
-    const client = session.client
-
-    let responseBuffer = ""
-    let toolResultsBuffer = ""
-    let lastActivityMessage = ""
-    let toolCallCount = 0
-    const sentToolOutputs = new Set<string>()
-
-    const activityHandler = async (activity: ActivityEvent) => {
-      if (activity.type === "tool_start") {
-        toolCallCount++
-        if (activity.message !== lastActivityMessage) {
-          lastActivityMessage = activity.message
-          await this.sendReply(context, `> ${activity.message}`)
-        }
-      }
-    }
-    const chunkHandler = (text: string) => {
-      responseBuffer += text
-    }
-    const updateHandler = async (update: any) => {
-      if (update.type === "tool_result" && update.toolResult) {
-        toolResultsBuffer += update.toolResult
-
-        const toolName = update.toolName || ""
-        const streamTools = config.streamTools || ["bash"]
-        const shouldShow = streamTools.some((t: string) => toolName.includes(t))
-        if (!shouldShow) return
-
-        const maxLen = 2000
-        const result =
-          update.toolResult.length > maxLen
-            ? update.toolResult.slice(0, maxLen) + "\n... (truncated)"
-            : update.toolResult
-        const trimmed = result.trim()
-        if (!trimmed) return
-
-        const hash = trimmed.slice(0, 100)
-        if (sentToolOutputs.has(hash)) return
-        sentToolOutputs.add(hash)
-        try {
-          await this.sendReply(context, trimmed)
-        } catch (err) {
-          this.log(`[RESULT] Error sending: ${err}`)
-        }
-      }
-
-      // Stream partial tool output
-      if (update.type === "tool_output_delta" && update.partialOutput) {
-        const toolName = update.toolName || ""
-        const streamTools = config.streamTools || ["bash"]
-        const shouldStream = streamTools.some((t: string) => toolName.includes(t))
-        if (!shouldStream) return
-
-        const output = update.partialOutput.trim()
-        if (!output) return
-        const hash = output.slice(0, 100)
-        if (sentToolOutputs.has(hash)) return
-        sentToolOutputs.add(hash)
-        await this.sendReply(context, output)
-        this.log(`[STREAM] Sent ${toolName} output (${output.length} chars)`)
-      }
-    }
-    const imageHandler = async (image: ImageContent) => {
-      this.log(`Received image: ${image.mimeType}`)
-    }
-    const permissionHandler = async (event: {
-      permission: string
-      path: string | null
-      message: string
-    }) => {
-      this.log(`[PERMISSION] Rejected: ${event.permission}${event.path ? ` (${event.path})` : ""}`)
-      await this.sendReply(context, `> ${event.message}`)
-    }
-
-    client.on("activity", activityHandler)
-    client.on("chunk", chunkHandler)
-    client.on("update", updateHandler)
-    client.on("image", imageHandler)
-    client.on("permission_rejected", permissionHandler)
+    // Mark active and ensure the handle is cleared in `finally` so a
+    // session-creation failure cannot leave the session permanently
+    // reporting "A request is already running" until restart.
+    const activeQuery = this.markQueryActive(context.sessionId)
 
     try {
-      await client.prompt(query)
-
-      // Images from tool results (primary)
-      const uploadedPaths = new Set<string>()
-      const toolImagePaths = extractImagePaths(toolResultsBuffer)
-      for (const imagePath of toolImagePaths) {
-        if (fs.existsSync(imagePath)) {
-          this.log(`Uploading image from tool result: ${imagePath}`)
-          await this.sendPhotoFromFile(context, imagePath)
-          uploadedPaths.add(imagePath)
-        }
-      }
-      // Images echoed in the response
-      const responseImagePaths = extractImagePaths(responseBuffer)
-      for (const imagePath of responseImagePaths) {
-        if (uploadedPaths.has(imagePath)) continue
-        if (fs.existsSync(imagePath)) {
-          this.log(`Uploading image from response: ${imagePath}`)
-          await this.sendPhotoFromFile(context, imagePath)
-        }
-      }
-
-      // Documents from tool results
-      const uploadedDocs = new Set<string>()
-      const toolDocPaths = extractDocPaths(toolResultsBuffer)
-      for (const docPath of toolDocPaths) {
-        if (fs.existsSync(docPath)) {
-          this.log(`Uploading document from tool result: ${docPath}`)
-          await this.sendDocumentFromFile(context, docPath)
-          uploadedDocs.add(docPath)
-        }
-      }
-      // Documents echoed in the response
-      const responseDocPaths = extractDocPaths(responseBuffer)
-      for (const docPath of responseDocPaths) {
-        if (uploadedDocs.has(docPath)) continue
-        if (fs.existsSync(docPath)) {
-          this.log(`Uploading document from response: ${docPath}`)
-          await this.sendDocumentFromFile(context, docPath)
-        }
-      }
-
-      // Final cleaned response
-      const cleanResponse = sanitizeServerPaths(
-        removeDocMarkers(removeImageMarkers(responseBuffer))
+      const session = await this.getOrCreateSession(context.sessionId, (client) =>
+        this.createSession(client)
       )
-      if (cleanResponse) {
-        session.outputChars += cleanResponse.length
-        await this.sendReply(context, cleanResponse)
+      if (!session) {
+        await this.sendReply(context, CommandHandler.formatConnectionErrorMessage())
+        return
       }
 
-      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-      const outChars = cleanResponse ? cleanResponse.length : 0
-      const tools = toolCallCount > 0 ? `, ${toolCallCount} tool${toolCallCount > 1 ? "s" : ""}` : ""
-      this.log(`[DONE] ${elapsed}s (${outChars} chars${tools}) [${context.sessionId}]`)
-    } catch (err) {
-      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-      this.logError(`[FAIL] ${elapsed}s [${context.sessionId}]:`, err)
-      await this.sendReply(context, CommandHandler.formatProcessingErrorMessage())
+      session.messageCount++
+      session.lastActivity = new Date()
+      session.inputChars += query.length
+
+      const client = session.client
+
+      let responseBuffer = ""
+      let toolResultsBuffer = ""
+      let lastActivityMessage = ""
+      let toolCallCount = 0
+      const sentToolOutputs = new Set<string>()
+
+      const activityHandler = async (activity: ActivityEvent) => {
+        if (activity.type === "tool_start") {
+          toolCallCount++
+          if (activity.message !== lastActivityMessage) {
+            lastActivityMessage = activity.message
+            await this.sendReply(context, `> ${activity.message}`)
+          }
+        }
+      }
+      const chunkHandler = (text: string) => {
+        responseBuffer += text
+      }
+      const updateHandler = async (update: any) => {
+        if (update.type === "tool_result" && update.toolResult) {
+          toolResultsBuffer += update.toolResult
+
+          const toolName = update.toolName || ""
+          const streamTools = config.streamTools || ["bash"]
+          const shouldShow = streamTools.some((t: string) => toolName.includes(t))
+          if (!shouldShow) return
+
+          const maxLen = 2000
+          const result =
+            update.toolResult.length > maxLen
+              ? update.toolResult.slice(0, maxLen) + "\n... (truncated)"
+              : update.toolResult
+          const trimmed = result.trim()
+          if (!trimmed) return
+
+          const hash = trimmed.slice(0, 100)
+          if (sentToolOutputs.has(hash)) return
+          sentToolOutputs.add(hash)
+          try {
+            await this.sendReply(context, trimmed)
+          } catch (err) {
+            this.log(`[RESULT] Error sending: ${err}`)
+          }
+        }
+
+        // Stream partial tool output
+        if (update.type === "tool_output_delta" && update.partialOutput) {
+          const toolName = update.toolName || ""
+          const streamTools = config.streamTools || ["bash"]
+          const shouldStream = streamTools.some((t: string) => toolName.includes(t))
+          if (!shouldStream) return
+
+          const output = update.partialOutput.trim()
+          if (!output) return
+          const hash = output.slice(0, 100)
+          if (sentToolOutputs.has(hash)) return
+          sentToolOutputs.add(hash)
+          await this.sendReply(context, output)
+          this.log(`[STREAM] Sent ${toolName} output (${output.length} chars)`)
+        }
+      }
+      const imageHandler = async (image: ImageContent) => {
+        this.log(`Received image: ${image.mimeType}`)
+      }
+      const permissionHandler = async (event: {
+        permission: string
+        path: string | null
+        message: string
+      }) => {
+        this.log(`[PERMISSION] Rejected: ${event.permission}${event.path ? ` (${event.path})` : ""}`)
+        await this.sendReply(context, `> ${event.message}`)
+      }
+
+      client.on("activity", activityHandler)
+      client.on("chunk", chunkHandler)
+      client.on("update", updateHandler)
+      client.on("image", imageHandler)
+      client.on("permission_rejected", permissionHandler)
+
+      try {
+        await client.prompt(query)
+
+        // Images from tool results (primary)
+        const uploadedPaths = new Set<string>()
+        const toolImagePaths = extractImagePaths(toolResultsBuffer)
+        for (const imagePath of toolImagePaths) {
+          if (fs.existsSync(imagePath)) {
+            this.log(`Uploading image from tool result: ${imagePath}`)
+            await this.sendPhotoFromFile(context, imagePath)
+            uploadedPaths.add(imagePath)
+          }
+        }
+        // Images echoed in the response
+        const responseImagePaths = extractImagePaths(responseBuffer)
+        for (const imagePath of responseImagePaths) {
+          if (uploadedPaths.has(imagePath)) continue
+          if (fs.existsSync(imagePath)) {
+            this.log(`Uploading image from response: ${imagePath}`)
+            await this.sendPhotoFromFile(context, imagePath)
+          }
+        }
+
+        // Documents from tool results
+        const uploadedDocs = new Set<string>()
+        const toolDocPaths = extractDocPaths(toolResultsBuffer)
+        for (const docPath of toolDocPaths) {
+          if (fs.existsSync(docPath)) {
+            this.log(`Uploading document from tool result: ${docPath}`)
+            await this.sendDocumentFromFile(context, docPath)
+            uploadedDocs.add(docPath)
+          }
+        }
+        // Documents echoed in the response
+        const responseDocPaths = extractDocPaths(responseBuffer)
+        for (const docPath of responseDocPaths) {
+          if (uploadedDocs.has(docPath)) continue
+          if (fs.existsSync(docPath)) {
+            this.log(`Uploading document from response: ${docPath}`)
+            await this.sendDocumentFromFile(context, docPath)
+          }
+        }
+
+        // Final cleaned response
+        const cleanResponse = sanitizeServerPaths(
+          removeDocMarkers(removeImageMarkers(responseBuffer))
+        )
+        if (cleanResponse) {
+          session.outputChars += cleanResponse.length
+          await this.sendReply(context, cleanResponse)
+        }
+
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+        const outChars = cleanResponse ? cleanResponse.length : 0
+        const tools = toolCallCount > 0 ? `, ${toolCallCount} tool${toolCallCount > 1 ? "s" : ""}` : ""
+        this.log(`[DONE] ${elapsed}s (${outChars} chars${tools}) [${context.sessionId}]`)
+      } catch (err) {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+        this.logError(`[FAIL] ${elapsed}s [${context.sessionId}]:`, err)
+        await this.sendReply(context, CommandHandler.formatProcessingErrorMessage())
+      } finally {
+        client.off("activity", activityHandler)
+        client.off("chunk", chunkHandler)
+        client.off("update", updateHandler)
+        client.off("image", imageHandler)
+        client.off("permission_rejected", permissionHandler)
+        if (session) session.lastActivity = new Date()
+        // markQueryDone is intentionally not called here -- the outer
+        // finally below is the single source of truth so it always runs,
+        // even on session-creation failure.
+      }
     } finally {
-      client.off("activity", activityHandler)
-      client.off("chunk", chunkHandler)
-      client.off("update", updateHandler)
-      client.off("image", imageHandler)
-      client.off("permission_rejected", permissionHandler)
-      if (session) session.lastActivity = new Date()
-      this.markQueryDone(context.sessionId)
+      this.markQueryDone(context.sessionId, activeQuery)
     }
   }
 
@@ -838,7 +854,7 @@ export class TelegramConnector extends BaseConnector<ChatSession> {
         return
       }
       const fields: Record<string, string> = { chat_id: context.chatId }
-      if (this.threadIsolation && context.messageThreadId !== null) {
+      if (context.messageThreadId !== null) {
         fields.message_thread_id = String(context.messageThreadId)
       }
       await tgUpload("sendPhoto", fields, filePath, "photo")
@@ -855,7 +871,7 @@ export class TelegramConnector extends BaseConnector<ChatSession> {
         return
       }
       const fields: Record<string, string> = { chat_id: context.chatId }
-      if (this.threadIsolation && context.messageThreadId !== null) {
+      if (context.messageThreadId !== null) {
         fields.message_thread_id = String(context.messageThreadId)
       }
       await tgUpload("sendDocument", fields, filePath, "document")
@@ -872,7 +888,7 @@ export class TelegramConnector extends BaseConnector<ChatSession> {
   private async sendChatAction(context: TelegramEventContext, action: string): Promise<void> {
     try {
       const body: Record<string, unknown> = { chat_id: context.chatId, action }
-      if (this.threadIsolation && context.messageThreadId !== null) {
+      if (context.messageThreadId !== null) {
         body.message_thread_id = context.messageThreadId
       }
       await tgApi("sendChatAction", body)
