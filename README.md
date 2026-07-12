@@ -109,6 +109,27 @@ OpenCode remains the default. To use another ACP v1 stdio agent, configure its c
 
 The bridge creates a deterministic, collision-resistant workspace for every connector/thread. It copies the optional profile into that workspace, persists the ACP session ID with its canonical working directory and backend identity, resumes after restart, and removes the mapping and backend session on `/clear`. Keep credentials in the process environment, not the profile or session store. See [Configuration](docs/CONFIGURATION.md#acp-backend).
 
+### Ferrum backend
+
+[Ferrum](https://codeberg.org/ominiverdi/ferrum) is a small Rust-native Linux coding agent that can run as an ACP v1 stdio backend:
+
+```bash
+ferrum acp
+```
+
+It is a good fit for chat bridge deployments that need fast startup, low runtime overhead, durable sessions, and tight tool policy. Ferrum supports JSONL session resume, `AGENTS.md` context loading, Agent Skills-style instruction packages, image input, OpenAI-compatible providers, ChatGPT/Codex OAuth, bounded built-in tools, and stdio MCP servers.
+
+For public or semi-public rooms, use a dedicated Ferrum profile and expose narrow MCP servers instead of broad local authority. For example, deny shell and file mutation unless the bot explicitly needs them:
+
+```toml
+mcp_enabled = true
+
+[tools]
+deny = ["write", "edit", "bash"]
+```
+
+The bridge/Ferrum integration supports per-thread workspaces, streaming text/thought updates, command discovery, cancellation, restart-safe resume/delete, and restrictive workspace policy. See [Configuration](docs/CONFIGURATION.md#ferrum-backend-notes).
+
 ## Docker
 
 Run with Docker (no Bun/Node installation needed):

@@ -27,6 +27,46 @@ Each connector/thread receives a deterministic working directory. The profile is
 
 `backendId` must change when the configured backend or its incompatible session format changes. ACP processes inherit the bridge environment; keep credentials outside profiles and the session store.
 
+### Ferrum backend notes
+
+[Ferrum](https://codeberg.org/ominiverdi/ferrum) is a small Rust-native Linux coding agent. It can be used directly as an ACP v1 stdio backend:
+
+```bash
+ferrum acp
+```
+
+Ferrum is useful for chat bot deployments because it starts quickly, has low runtime overhead, persists durable JSONL sessions, and has explicit tool policy. The bridge has been validated with Ferrum for executable/argument selection, per-thread workspaces, text and thought streaming, command discovery, cancellation, process restart, session resume/delete, and restrictive workspace policy.
+
+A typical Ferrum chat profile keeps broad local authority off by default and exposes specific capabilities through MCP:
+
+```toml
+mcp_enabled = true
+
+[tools]
+deny = ["write", "edit", "bash", "wait"]
+writable_roots = ["."]
+
+[[mcp.servers]]
+name = "search"
+command = "/usr/local/bin/search-mcp"
+args = []
+enabled = true
+```
+
+Useful Ferrum features for this setup:
+
+- `AGENTS.md` context loading and Agent Skills-style instruction packages
+- configurable providers, models, thinking, safety, and context budget
+- OpenAI-compatible providers and ChatGPT/Codex OAuth
+- bounded native tools for file access, search, editing, and shell execution
+- allow/deny tool exposure policy
+- stdio MCP client support with namespaced tools
+- project-local `.ferrum/config.toml` restrictions for tools, roots, skills, MCP access, safety, and tool-round limits
+
+Ferrum is not a sandbox: an allowed tool or MCP server runs with the Unix permissions of the Ferrum process. Its safety model is still meaningful. Native tools and shell execution are bounded and policy-checked; writable roots and safety tiers limit mutation; MCP servers get a filtered environment, explicit env allowlists, bounded protocol frames/schema/output, stderr withholding from model-visible errors, sanitized tool-name collision checks, transport quarantine on framing failure, and Linux process-tree cleanup through delegated cgroup-v2 when available.
+
+For production chat bots, configure only trusted MCP commands, pass only required environment variables, keep credentials outside copied profiles and session stores, and prefer narrow MCP tools over enabling general shell access.
+
 ## opencode.json (OpenCode backend)
 
 The `opencode.json` file defines the secure OpenCode agent configuration:
