@@ -74,7 +74,8 @@ Embeddable chat widget for any webpage. Two modes: **widget** (floating bubble +
 git clone https://github.com/ominiverdi/opencode-chat-bridge
 cd opencode-chat-bridge
 bun install
-cp .env.example .env   # Edit with your credentials
+cp .env.example .env                       # Edit with your credentials
+cp chat-bridge.json.example chat-bridge.json # Edit local bridge config
 ```
 
 Run a connector:

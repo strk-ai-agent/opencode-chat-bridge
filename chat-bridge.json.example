@@ -1,0 +1,86 @@
+{
+  "botName": "opencode",
+  "trigger": "!oc",
+  "rateLimitSeconds": 5,
+  "streamTools": ["bash"],
+  "sessionStorePath": "./.opencode/chat-sessions.json",
+  "defaultAgent": null,
+  "modes": {
+    "!s": "serious",
+    "!d": "sarcastic",
+    "!a": "agent",
+    "!p": "plan"
+  },
+  "sessionPicker": {
+    "enabled": false,
+    "connectors": [],
+    "mirrorIntervalSeconds": 60
+  },
+  "acp": {
+    "command": "opencode",
+    "args": ["acp"],
+    "backendId": "opencode",
+    "profileDir": ""
+  },
+  "matrix": {
+    "enabled": false,
+    "homeserver": "https://matrix.org",
+    "userId": "{env:MATRIX_USER_ID}",
+    "accessToken": "{env:MATRIX_ACCESS_TOKEN}",
+    "password": "{env:MATRIX_PASSWORD}",
+    "deviceId": "OPENCODE_BRIDGE",
+    "encryption": {
+      "enabled": false,
+      "storePath": "./matrix-store/"
+    },
+    "autoJoin": true,
+    "triggerPatterns": ["!oc "],
+    "ignoreRooms": [],
+    "ignoreUsers": [],
+    "allowedUsers": [],
+    "formatHtml": false,
+    "threadIsolation": true
+  },
+  "mattermost": {
+    "enabled": false,
+    "url": "{env:MATTERMOST_URL}",
+    "token": "{env:MATTERMOST_TOKEN}",
+    "teamName": "",
+    "respondToMentions": true,
+    "ignoreChannels": [],
+    "ignoreUsers": [],
+    "allowedUsers": [],
+    "threadIsolation": true
+  },
+  "whatsapp": {
+    "enabled": false,
+    "authFolder": "./.whatsapp-auth",
+    "allowedUsers": [],
+    "respondToOthers": true
+  },
+  "slack": {
+    "enabled": false,
+    "allowedUsers": [],
+    "threadIsolation": true
+  },
+  "discord": {
+    "enabled": false,
+    "allowedUsers": []
+  },
+  "telegram": {
+    "enabled": false,
+    "token": "{env:TELEGRAM_BOT_TOKEN}",
+    "respondToMentions": true,
+    "threadIsolation": true,
+    "ignoreChats": [],
+    "ignoreUsers": [],
+    "allowedUsers": []
+  },
+  "web": {
+    "enabled": false,
+    "port": 3420,
+    "host": "0.0.0.0",
+    "allowedOrigins": ["*"],
+    "publicUrl": ""
+  }
+}

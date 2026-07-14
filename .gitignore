@@ -10,6 +10,8 @@ dist/
 !.env.example
 config.json
 !config.example.json
+chat-bridge.json
+!chat-bridge.json.example
 
 # OpenCode local config (may contain secrets from MCP environment blocks)
 opencode.json

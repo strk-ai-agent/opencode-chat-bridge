@@ -4,8 +4,11 @@ This document describes all configuration options for opencode-chat-bridge.
 
 ## Quick Setup
 
-1. Create `opencode.json` with the `chat-bridge` agent
-2. Run `bun src/cli.ts`
+1. Copy `chat-bridge.json.example` to `chat-bridge.json` and edit local bridge settings
+2. Create `opencode.json` with the `chat-bridge` agent
+3. Run `bun src/cli.ts`
+
+`chat-bridge.json` is intentionally ignored by git. Keep deployment-specific connector settings, local paths, and credentials there. Commit safe defaults or examples to `chat-bridge.json.example` instead.
 
 ## ACP backend
 

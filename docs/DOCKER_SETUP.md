@@ -140,7 +140,7 @@ Model and AI provider configuration. See `opencode.example.json` for reference.
 
 ### chat-bridge.json
 
-Bot settings: trigger prefix, bot name, connector options. See `config.example.json` for reference.
+Bot settings: trigger prefix, bot name, connector options. See `chat-bridge.json.example` for reference.
 
 ```json
 {
