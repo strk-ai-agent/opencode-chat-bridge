@@ -43,6 +43,7 @@ export interface WhatsAppConfig {
   enabled: boolean
   authFolder: string
   allowedUsers: string[]
+  respondToOthers: boolean
 }
 
 export interface SlackConfig {
@@ -166,7 +167,8 @@ const defaultConfig: ChatBridgeConfig = {
   whatsapp: {
     enabled: false,
     authFolder: "./.whatsapp-auth",
-    allowedUsers: []
+    allowedUsers: [],
+    respondToOthers: true
   },
   slack: {
     enabled: false,

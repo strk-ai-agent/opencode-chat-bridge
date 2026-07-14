@@ -31,9 +31,14 @@ The WhatsApp connector works with minimal configuration. Optionally add to `.env
 # Message prefix to trigger bot (default: !oc)
 WHATSAPP_TRIGGER=!oc
 
-# Restrict bot to specific phone numbers (comma-separated, optional)
+# Restrict bot to specific WhatsApp sender IDs (comma-separated, optional)
 # Leave empty to respond to everyone who messages
-WHATSAPP_ALLOWED_USERS=1234567890,0987654321
+# Check the connector logs for the [MSG] sender ID; recent WhatsApp accounts may use LID values, not phone numbers.
+WHATSAPP_ALLOWED_USERS=1234567890,999888777666
+
+# Personal linked-account mode: false means only your own WhatsApp messages trigger the bot.
+# Other people's messages are ignored even if they use the trigger.
+WHATSAPP_RESPOND_TO_OTHERS=false
 ```
 
 ## Step 3: Run the Connector
@@ -68,7 +73,7 @@ Once linked, you'll see:
 
 ```
 WhatsApp connected!
-Bot phone number: 1234567890
+Bot user: 1234567890
 ```
 
 ## Step 5: Test the Bot
@@ -80,6 +85,15 @@ Send a message to the linked WhatsApp number:
 !oc what time is it?
 !oc search for map projections
 ```
+
+If you message yourself in WhatsApp using the linked account's self-chat, plain text is treated as a bot prompt without the trigger:
+
+```
+what time is it?
+search for map projections
+```
+
+Plain messages in other chats still require the trigger.
 
 ## Usage
 
@@ -103,14 +117,33 @@ Messages must start with the trigger (default: `!oc`):
 
 ### Restricting Access
 
-To limit who can use the bot, set allowed users:
+For a personal linked-account bridge, disable responses to other people:
+
+```json
+{
+  "whatsapp": {
+    "respondToOthers": false
+  }
+}
+```
+
+or:
+
+```bash
+WHATSAPP_RESPOND_TO_OTHERS=false
+```
+
+When `respondToOthers` is `false`, only messages sent by the linked WhatsApp account can trigger the bot. Self-chat plain text still works without the trigger; owner messages in other chats still need the trigger. Other people's messages are ignored even if they use the trigger.
+
+To limit which non-owner senders can use the bot by sender ID, set allowed users:
 
 ```bash
 # .env
-WHATSAPP_ALLOWED_USERS=1234567890,0987654321
+# Use the sender ID shown in connector logs after [MSG]. It may be a LID rather than a phone number.
+WHATSAPP_ALLOWED_USERS=1234567890,999888777666
 ```
 
-WhatsApp matches connector-native sender IDs. In many direct chats this looks like a phone-like number without the `+` prefix, but some accounts use a different LID-based identifier. If unsure, check the connector logs after sending a message and use the ID shown in `[MSG]` or `[IGNORED]` lines.
+WhatsApp matches connector-native sender IDs for non-owner messages. The linked WhatsApp account is always allowed. In many direct chats the sender ID looks like a phone-like number without the `+` prefix, but some accounts use a different LID-based identifier. If unsure, check the connector logs after the sender sends a message and use the ID shown in `[MSG]` lines.
 
 Breaking change: older builds used `WHATSAPP_ALLOWED_NUMBERS`. That name has been removed in favor of the cross-connector `*_ALLOWED_USERS` pattern.
 
@@ -160,7 +193,7 @@ To fix:
 
 1. Check that the connector is running and shows "WhatsApp connected!"
 2. Verify the message starts with the trigger (`!oc`)
-3. If using `WHATSAPP_ALLOWED_USERS`, verify your number is in the list
+3. If using `WHATSAPP_ALLOWED_USERS`, verify your sender ID from the `[MSG]` log prefix is in the list
 4. Check the logs for errors
 
 ### Rate Limiting

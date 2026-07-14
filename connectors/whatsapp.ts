@@ -13,7 +13,7 @@
  * 
  * Environment variables:
  *   WHATSAPP_TRIGGER - Message prefix to trigger bot (default: !oc)
- *   WHATSAPP_ALLOWED_USERS - Comma-separated phone numbers to respond to (optional)
+ *   WHATSAPP_ALLOWED_USERS - Comma-separated WhatsApp sender IDs to respond to (optional)
  */
 
 import fs from "fs"
@@ -63,6 +63,9 @@ const ENV_ALLOWED_USERS = parseCsvList(process.env.WHATSAPP_ALLOWED_USERS)
 const ALLOWED_USERS = ENV_ALLOWED_USERS.length > 0 ? ENV_ALLOWED_USERS : config.whatsapp.allowedUsers
 const AUTH_FOLDER = path.resolve(process.cwd(), config.whatsapp.authFolder)
 const SESSION_RETENTION_DAYS = parseInt(process.env.SESSION_RETENTION_DAYS || "7", 10)
+const RESPOND_TO_OTHERS = process.env.WHATSAPP_RESPOND_TO_OTHERS === undefined
+  ? config.whatsapp.respondToOthers
+  : !["0", "false", "no", "off"].includes(process.env.WHATSAPP_RESPOND_TO_OTHERS.toLowerCase())
 
 // =============================================================================
 // Session Type
@@ -79,6 +82,7 @@ interface ChatSession extends BaseSession {
 class WhatsAppConnector extends BaseConnector<ChatSession> {
   private sock: ReturnType<typeof makeWASocket> | null = null
   private myNumber: string = ""
+  private ownIds = new Set<string>()
 
   constructor() {
     super({
@@ -199,9 +203,13 @@ class WhatsAppConnector extends BaseConnector<ChatSession> {
       }
 
       if (connection === "open") {
-        this.myNumber = state.creds.me?.id?.split(":")[0] || ""
+        const me = state.creds.me as { id?: string; lid?: string } | undefined
+        this.myNumber = this.extractWhatsAppUserId(me?.id || "")
+        this.updateOwnIds(me?.id, me?.lid)
         this.log("Connected!")
         console.log(`  My number: ${this.myNumber}`)
+        console.log(`  Own IDs: ${Array.from(this.ownIds).join(", ") || "pending"}`)
+        console.log(`  Respond to others: ${RESPOND_TO_OTHERS ? "yes" : "no"}`)
         this.log("Listening for messages...")
       }
 
@@ -211,7 +219,11 @@ class WhatsAppConnector extends BaseConnector<ChatSession> {
     })
 
     // Save credentials on update
-    this.sock.ev.on("creds.update", saveCreds)
+    this.sock.ev.on("creds.update", (creds) => {
+      const me = creds.me as { id?: string; lid?: string } | undefined
+      this.updateOwnIds(me?.id, me?.lid)
+      saveCreds()
+    })
 
     // Handle incoming messages
     this.sock.ev.on("messages.upsert", async ({ messages, type }) => {
@@ -249,27 +261,38 @@ class WhatsAppConnector extends BaseConnector<ChatSession> {
     // Skip messages that start with our bot name (our own responses)
     if (text.startsWith(`${BOT_NAME}:`)) return
 
-    // Extract phone number from JID (format: 1234567890@s.whatsapp.net)
-    const phoneNumber = chatId.split("@")[0]
+    // Extract sender ID from the sender JID. In recent WhatsApp/Baileys this may
+    // be a LID (`...@lid`) rather than a phone-number JID. In groups,
+    // `remoteJid` is the group and `participant` is the actual sender.
+    const senderJid = msg.key.participant || msg.participant || chatId
+    const senderId = this.extractWhatsAppUserId(senderJid)
 
-    // Check if number is allowed
-    if (!this.isUserAllowed(phoneNumber)) return
+    const isOwnerMessage = msg.key?.fromMe === true
+
+    // Personal WhatsApp bridges can be restricted to the linked account only.
+    if (!RESPOND_TO_OTHERS && !isOwnerMessage) return
+
+    // Check if non-owner senders are allowed. The linked account is always
+    // allowed so personal self-chat UX does not depend on brittle PN/LID strings.
+    if (!isOwnerMessage && !this.isUserAllowed(senderId)) return
 
     // Deduplicate events
     const dedupeId = msg.key.id || `${chatId}:${Date.now()}`
     if (this.isDuplicateEvent(dedupeId)) return
 
-    this.log(`[MSG] ${phoneNumber}: ${text}`)
+    this.log(`[MSG] ${senderId}: ${text}`)
 
     // Check trigger. Bridge-local slash commands may be sent bare on WhatsApp
-    // for quick mobile use, e.g. /h, /p, /s, /d. Model prompts still require
-    // the configured trigger.
+    // for quick mobile use, e.g. /h, /p, /s, /d. In the linked account's
+    // self-chat, plain text is also treated as a prompt.
     let query = ""
     if (text.startsWith(TRIGGER + " ")) {
       query = text.slice(TRIGGER.length + 1).trim()
     } else if (text.startsWith(TRIGGER)) {
       query = text.slice(TRIGGER.length).trim()
     } else if (this.isBareBridgeCommand(text)) {
+      query = text.trim()
+    } else if (this.isSelfChatMessage(msg)) {
       query = text.trim()
     } else {
       return
@@ -290,10 +313,27 @@ class WhatsAppConnector extends BaseConnector<ChatSession> {
     }
 
     // Rate limiting
-    if (!this.checkRateLimit(phoneNumber)) return
+    if (!this.checkRateLimit(senderId)) return
 
-    this.log(`[QUERY] ${phoneNumber}: ${query}`)
-    await this.processQuery(chatId, phoneNumber, query)
+    this.log(`[QUERY] ${senderId}: ${query}`)
+    await this.processQuery(chatId, senderId, query)
+  }
+
+  private extractWhatsAppUserId(jid: string): string {
+    return jid.split("@")[0]?.split(":")[0] || jid
+  }
+
+  private updateOwnIds(...jids: Array<string | undefined>): void {
+    for (const jid of jids) {
+      const id = this.extractWhatsAppUserId(jid || "")
+      if (id) this.ownIds.add(id)
+    }
+  }
+
+  private isSelfChatMessage(msg: any): boolean {
+    if (msg.key?.fromMe !== true) return false
+    const chatId = this.extractWhatsAppUserId(msg.key?.remoteJid || "")
+    return Boolean(chatId && this.ownIds.has(chatId))
   }
 
   private isBareBridgeCommand(text: string): boolean {
@@ -308,13 +348,13 @@ class WhatsAppConnector extends BaseConnector<ChatSession> {
   // WhatsApp-specific: Query processing
   // ---------------------------------------------------------------------------
 
-  private async processQuery(chatId: string, phoneNumber: string, query: string): Promise<void> {
+  private async processQuery(chatId: string, senderId: string, query: string): Promise<void> {
     const startTime = Date.now()
 
     // WhatsApp uses "latest message wins": abort the old OpenCode process and
     // drop its cached session so the new request never reuses a disconnected client.
     if (this.isQueryActive(chatId)) {
-      this.log(`[ABORT] New query from ${phoneNumber}, aborting previous...`)
+      this.log(`[ABORT] New query from ${senderId}, aborting previous...`)
       this.abortQuery(chatId)
     }
 

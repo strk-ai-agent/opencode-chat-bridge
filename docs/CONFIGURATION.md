@@ -624,9 +624,21 @@ DISCORD_TOKEN="..."
 
 ### User Allowlists
 
-Each chat connector can restrict access to a connector-specific list of user IDs. Empty list means all users are allowed.
+Each chat connector can restrict access to a connector-specific list of user IDs. Empty list means all users are allowed. For WhatsApp, `allowedUsers` filters non-owner senders; the linked WhatsApp account itself is always allowed.
 
 These IDs are platform-native identifiers, not always human-friendly usernames or phone numbers. For example, Slack uses member IDs like `U01ABC123`, while WhatsApp may use a sender ID shown in connector logs.
+
+WhatsApp also supports personal linked-account mode:
+
+```json
+{
+  "whatsapp": {
+    "respondToOthers": false
+  }
+}
+```
+
+When `respondToOthers` is `false`, only messages sent by the linked WhatsApp account can trigger the bot. Messages from other people are ignored even if they use the trigger. WhatsApp self-chat plain text is always accepted as a prompt from the owner; other chats still require the configured trigger.
 
 In `chat-bridge.json`:
 
@@ -646,6 +658,7 @@ Environment variable overrides:
 |---------|-----------|
 | `SLACK_ALLOWED_USERS` | Slack |
 | `WHATSAPP_ALLOWED_USERS` | WhatsApp |
+| `WHATSAPP_RESPOND_TO_OTHERS` | WhatsApp owner-only mode (`false` = ignore other people) |
 | `MATRIX_ALLOWED_USERS` | Matrix |
 | `DISCORD_ALLOWED_USERS` | Discord |
 | `MATTERMOST_ALLOWED_USERS` | Mattermost |
