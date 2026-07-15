@@ -1,7 +1,8 @@
 /**
  * Configuration loader for chat-bridge
  * 
- * Loads settings from chat-bridge.json with environment variable substitution.
+ * Loads settings from chat-bridge.json or chat-bridge.jsonc with environment
+ * variable substitution.
  */
 
 import * as fs from "fs"
@@ -198,6 +199,129 @@ const defaultConfig: ChatBridgeConfig = {
 }
 
 /**
+ * Remove JSONC comments while preserving strings and line structure so that
+ * JSON.parse can still report useful line/column information for malformed
+ * configuration files.
+ */
+function stripJsoncComments(content: string): string {
+  let result = ""
+  let inString = false
+  let escaped = false
+  let lineComment = false
+  let blockComment = false
+
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i]
+    const next = content[i + 1]
+
+    if (lineComment) {
+      if (char === "\n" || char === "\r") {
+        lineComment = false
+        result += char
+      } else {
+        result += " "
+      }
+      continue
+    }
+
+    if (blockComment) {
+      if (char === "*" && next === "/") {
+        blockComment = false
+        result += "  "
+        i++
+      } else if (char === "\n" || char === "\r") {
+        result += char
+      } else {
+        result += " "
+      }
+      continue
+    }
+
+    if (inString) {
+      result += char
+      if (escaped) {
+        escaped = false
+      } else if (char === "\\") {
+        escaped = true
+      } else if (char === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (char === '"') {
+      inString = true
+      result += char
+    } else if (char === "/" && next === "/") {
+      lineComment = true
+      result += "  "
+      i++
+    } else if (char === "/" && next === "*") {
+      blockComment = true
+      result += "  "
+      i++
+    } else {
+      result += char
+    }
+  }
+
+  return result
+}
+
+/**
+ * JSONC commonly permits trailing commas as well as comments. Remove commas
+ * immediately before a closing array/object delimiter without touching
+ * commas inside strings.
+ */
+function stripJsoncTrailingCommas(content: string): string {
+  let result = ""
+  let inString = false
+  let escaped = false
+
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i]
+
+    if (inString) {
+      result += char
+      if (escaped) {
+        escaped = false
+      } else if (char === "\\") {
+        escaped = true
+      } else if (char === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (char === '"') {
+      inString = true
+      result += char
+      continue
+    }
+
+    if (char === ",") {
+      let next = i + 1
+      while (next < content.length && /\s/.test(content[next])) {
+        next++
+      }
+      if (content[next] === "}" || content[next] === "]") {
+        continue
+      }
+    }
+
+    result += char
+  }
+
+  return result
+}
+
+function parseJsonc(content: string): unknown {
+  const withoutBom = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content
+  const withoutComments = stripJsoncComments(withoutBom)
+  return JSON.parse(stripJsoncTrailingCommas(withoutComments))
+}
+
+/**
  * Replace {env:VAR_NAME} patterns with environment variables
  */
 function substituteEnvVars(obj: any): any {
@@ -241,7 +365,7 @@ function deepMerge<T>(target: T, source: Partial<T>): T {
 let cachedConfig: ChatBridgeConfig | null = null
 
 /**
- * Load configuration from chat-bridge.json
+ * Load configuration from chat-bridge.json or chat-bridge.jsonc
  */
 export function loadConfig(configPath?: string): ChatBridgeConfig {
   if (cachedConfig) return cachedConfig
@@ -257,7 +381,7 @@ export function loadConfig(configPath?: string): ChatBridgeConfig {
     if (fs.existsSync(filePath)) {
       try {
         const content = fs.readFileSync(filePath, "utf-8")
-        const parsed = JSON.parse(content)
+        const parsed = parseJsonc(content)
         const substituted = substituteEnvVars(parsed)
         cachedConfig = deepMerge(defaultConfig, substituted)
         console.log(`[CONFIG] Loaded from ${filePath}`)

@@ -5,8 +5,11 @@ This document describes all configuration options for opencode-chat-bridge.
 ## Quick Setup
 
 1. Copy `chat-bridge.json.example` to `chat-bridge.json` and edit local bridge settings
-2. Create `opencode.json` with the `chat-bridge` agent
-3. Run `bun src/cli.ts`
+2. Alternatively, use `chat-bridge.jsonc` when comments or trailing commas are useful
+3. Create `opencode.json` with the `chat-bridge` agent
+4. Run `bun src/cli.ts`
+
+The loader checks `chat-bridge.json` first, then `chat-bridge.jsonc`. JSONC files support `//` and `/* ... */` comments, trailing commas, and `{env:VAR_NAME}` environment variable substitution.
 
 `chat-bridge.json` is intentionally ignored by git. Keep deployment-specific connector settings, local paths, and credentials there. Commit safe defaults or examples to `chat-bridge.json.example` instead.
 

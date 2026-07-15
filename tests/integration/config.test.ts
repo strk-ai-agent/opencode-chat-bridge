@@ -66,6 +66,26 @@ describe("config", () => {
       expect(config.rateLimitSeconds).toBe(10)
     })
 
+    test("loads config from chat-bridge.jsonc with comments and trailing commas", () => {
+      const configContent = `{
+        // The JSONC loader should ignore line comments.
+        "botName": "jsonc-bot",
+        "telegram": {
+          /* Block comments are supported too. */
+          "threadIsolation": false,
+          "token": "https://example.test/path/*not a comment*/",
+        },
+      }`
+      fs.writeFileSync(path.join(testDir, "chat-bridge.jsonc"), configContent)
+      process.chdir(testDir)
+
+      const config = loadConfig()
+
+      expect(config.botName).toBe("jsonc-bot")
+      expect(config.telegram.threadIsolation).toBe(false)
+      expect(config.telegram.token).toBe("https://example.test/path/*not a comment*/")
+    })
+
     test("merges with defaults for partial config", () => {
       const configContent = {
         botName: "partial-bot"
