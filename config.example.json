@@ -50,6 +50,7 @@
     "token": "{env:TELEGRAM_BOT_TOKEN}",
     "respondToMentions": true,
     "threadIsolation": true,
+    "respondToReplies": true,
     "ignoreChats": [],
     "ignoreUsers": [],
     "allowedUsers": []
