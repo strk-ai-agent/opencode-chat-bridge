@@ -57,6 +57,12 @@ export interface DiscordConfig {
   allowedUsers: string[]
 }
 
+export interface TelegramAttachmentsConfig {
+  enabled: boolean
+  maxFileBytes: number
+  maxFilesPerMessage: number
+}
+
 export interface TelegramConfig {
   enabled: boolean
   /** Bot token from @BotFather -- env: TELEGRAM_BOT_TOKEN */
@@ -72,6 +78,8 @@ export interface TelegramConfig {
    *  requires an active session for the same chat/topic first so the bot
    *  doesn't pick up stale replies from days-old conversations. */
   respondToReplies: boolean
+  /** Download incoming Telegram media into the session workspace for the LLM. */
+  attachments: TelegramAttachmentsConfig
   /** Comma-separated Telegram numeric chat IDs and/or user IDs to ignore */
   ignoreChats: string[]
   /** Comma-separated Telegram numeric user IDs to ignore */
@@ -189,6 +197,11 @@ const defaultConfig: ChatBridgeConfig = {
     respondToMentions: true,
     threadIsolation: true,
     respondToReplies: true,
+    attachments: {
+      enabled: true,
+      maxFileBytes: 20 * 1024 * 1024,
+      maxFilesPerMessage: 4,
+    },
     ignoreChats: [],
     ignoreUsers: [],
     allowedUsers: [],

@@ -62,6 +62,11 @@ installations), add to `chat-bridge.json`:
     "respondToMentions": true,
     "threadIsolation": true,
     "respondToReplies": true,
+    "attachments": {
+      "enabled": true,
+      "maxFileBytes": 20971520,
+      "maxFilesPerMessage": 4
+    },
     "ignoreChats": [],
     "ignoreUsers": [],
     "allowedUsers": []
@@ -75,6 +80,9 @@ addition to the trigger prefix). `threadIsolation` (default `true`) gives each
 forum topic its own isolated OpenCode session. `respondToReplies` (default
 `true`) makes the bot also reply when you swipe-reply to one of its own
 messages, even without a trigger prefix; set it to `false` to disable.
+`attachments.enabled` (default `true`) controls incoming file downloads;
+`attachments.maxFileBytes` is capped at Telegram Bot API's 20 MB limit and
+`attachments.maxFilesPerMessage` defaults to 4.
 
 ## Step 3: Run the Connector
 
@@ -178,6 +186,34 @@ during tool use (e.g., `bash` outputs, `[DOCLIBRARY_IMAGE]` /
 
 Telegram limits: photos up to **10 MB** and 1024x1024 max dimension before
 recomputation; documents up to **50 MB**.
+
+### File attachments from users
+
+Users can send the bot photos, documents, videos, audio files, voice notes,
+animations (GIFs), video notes, and stickers. The connector downloads each
+attachment to `<session-cwd>/uploads/` and surfaces its absolute path to the
+LLM alongside the message caption, so:
+
+- **Photo with caption `What's in this picture?`** -> the LLM sees
+  `[Attached file: /path/to/uploads/...jpg (image/jpeg, N bytes, photo,
+  filename="...")]` followed by your caption, and can use `read`, `bash`,
+  `glob`, etc. to inspect it.
+- **Document with caption `Summarise this paper`** -> same pattern; the LLM
+  reads the file directly.
+- **Caption-less attachment in a DM** -> the bot still triggers because the
+  presence of an attachment counts as engagement. In groups the trigger
+  requirement still applies unless the message is inside an active topic or is
+  a reply to this bot in an active session.
+- **Voice / video / animation** -> downloaded with default MIME types; the LLM
+  treats them as opaque file paths for whatever tool you have configured
+  (e.g., a transcription MCP server).
+
+Telegram Bot API caps downloads at **20 MB per file**. Files above that size
+are skipped with a log line and the message is still processed (with whatever
+caption the user sent). The connector also enforces `attachments.maxFileBytes`
+(up to the Telegram cap) and `attachments.maxFilesPerMessage` (default 4).
+Each session cleans up its `uploads/` directory when the session itself is
+removed (`SESSION_RETENTION_DAYS`, default 7).
 
 ### Long message splitting
 
@@ -344,12 +380,12 @@ The connector maintains one ACP session per chat (or per topic with
 
 - **No group admin actions.** The connector does not handle Telegram admin
   events like new members, left members, or pinned messages.
-- **Stickers / voice / video messages** are accepted but only their `caption`
-  is forwarded to OpenCode.
+- **Stickers / voice / video messages** in the absence of a caption and the
+  trigger/mention requirement are not forwarded to OpenCode. Captioned media
+  of any kind is processed normally (see [File attachments from
+  users](#file-attachments-from-users)).
 - **Inline queries** are not handled. Trigger the bot by sending it a
   message directly.
-- **Replies to non-text messages** (e.g., a sticker) without a caption are
-  ignored.
 - **One bot per connector instance.** Run multiple Telegram bots by
   starting additional connector processes with separate
   `TELEGRAM_BOT_TOKEN` env vars.

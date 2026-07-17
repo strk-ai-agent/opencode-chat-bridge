@@ -67,6 +67,11 @@
     "respondToMentions": true,
     "threadIsolation": true,
     "respondToReplies": true,
+    "attachments": {
+      "enabled": true,
+      "maxFileBytes": 20971520,
+      "maxFilesPerMessage": 4
+    },
     "ignoreChats": [],
     "ignoreUsers": [],
     "allowedUsers": []
