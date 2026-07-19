@@ -45,6 +45,8 @@ describe("ACPClient session updates", () => {
         title: "websearch",
       },
     })
+    expect(activity).toHaveLength(0)
+
     ;(client as any).handleSessionUpdate({
       update: {
         sessionUpdate: "tool_call_update",
@@ -59,6 +61,28 @@ describe("ACPClient session updates", () => {
     expect(activity[0].tool).toBe("Exa Web Search")
     expect(activity[0].description).toContain("query=current time in Barcelona")
     expect(activity[0].description).toContain("numResults=5")
+  })
+
+  test("preserves the end of long path arguments", () => {
+    const client = new ACPClient()
+    let description = ""
+    client.on("activity", (event) => {
+      if (event.type === "tool_start") description = event.description || ""
+    })
+
+    ;(client as any).handleSessionUpdate({
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-read",
+        title: "read",
+        rawInput: {
+          filePath: "/home/user/.cache/opencode-chat-bridge/sessions/whatsapp/a-very-long-session-identifier/generated/demo_log.txt",
+        },
+      },
+    })
+
+    expect(description).toStartWith("filePath=...")
+    expect(description).toEndWith("/generated/demo_log.txt")
   })
 
   test("flushes an argument-less tool start when the tool completes", () => {

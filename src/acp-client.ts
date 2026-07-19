@@ -11,7 +11,7 @@ import { join } from "path"
 // Debug trace — writes to logs/bridge-debug.log when BRIDGE_DEBUG=1
 const BRIDGE_DEBUG = process.env.BRIDGE_DEBUG === "1"
 const BRIDGE_DEBUG_LOG = join(process.cwd(), "logs", "bridge-debug.log")
-const TOOL_ACTIVITY_ARGUMENT_WAIT_MS = 2_000
+const MAX_TOOL_ARG_VALUE_LENGTH = 80
 function dbg(msg: string): void {
   if (!BRIDGE_DEBUG) return
   const ts = new Date().toISOString()
@@ -123,12 +123,11 @@ export class ACPClient extends EventEmitter {
   private toolOutputSeen = new Map<string, number>()
   // Track tool calls we already emitted activity for (dedup)
   private toolActivityEmitted = new Set<string>()
-  // Briefly defer argument-less starts because some ACP backends provide
-  // rawInput in the immediately following in_progress update.
+  // Defer argument-less starts because ACP backends may provide rawInput in a
+  // later in_progress update. Terminal updates flush genuinely argument-less calls.
   private pendingToolActivity = new Map<string, {
     toolName: string
     args: any
-    timer: ReturnType<typeof setTimeout>
   }>()
   
   constructor(options: ACPClientOptions = {}) {
@@ -798,9 +797,7 @@ export class ACPClient extends EventEmitter {
   private emitToolStartActivity(toolCallId: string, toolName: string, args: any): void {
     if (this.toolActivityEmitted.has(toolCallId)) return
 
-    const pending = this.pendingToolActivity.get(toolCallId)
-    if (pending) {
-      clearTimeout(pending.timer)
+    if (this.pendingToolActivity.has(toolCallId)) {
       this.pendingToolActivity.delete(toolCallId)
     }
 
@@ -830,16 +827,7 @@ export class ACPClient extends EventEmitter {
       return
     }
 
-    const pending = {
-      toolName,
-      args,
-      timer: setTimeout(() => {
-        const current = this.pendingToolActivity.get(toolCallId)
-        if (!current) return
-        this.emitToolStartActivity(toolCallId, current.toolName, current.args)
-      }, TOOL_ACTIVITY_ARGUMENT_WAIT_MS),
-    }
-    this.pendingToolActivity.set(toolCallId, pending)
+    this.pendingToolActivity.set(toolCallId, { toolName, args })
   }
 
   private flushToolStartActivity(toolCallId: string, fallbackToolName: string): void {
@@ -853,9 +841,6 @@ export class ACPClient extends EventEmitter {
   }
 
   private clearPendingToolActivities(): void {
-    for (const pending of this.pendingToolActivity.values()) {
-      clearTimeout(pending.timer)
-    }
     this.pendingToolActivity.clear()
   }
 
@@ -864,16 +849,26 @@ export class ACPClient extends EventEmitter {
   private formatToolActivity(tool: string, args: any, phase: "start" | "end"): { description: string; toolName: string } {
     if (phase === "end") return { description: "Done", toolName: tool }
     
-    // Format args compactly - show key=value pairs, truncate long values
+    // Format args compactly. Preserve the end of path-like values so filenames
+    // remain visible; preserve the beginning of commands, queries, and text.
+    const pathLikeKeys = new Set([
+      "path", "filepath", "file_path", "cwd", "workdir", "directory",
+      "dir", "folder", "url", "uri",
+    ])
+    const truncateValue = (key: string, value: string): string => {
+      if (value.length <= MAX_TOOL_ARG_VALUE_LENGTH) return value
+      if (pathLikeKeys.has(key.toLowerCase())) {
+        return `...${value.slice(-(MAX_TOOL_ARG_VALUE_LENGTH - 3))}`
+      }
+      return `${value.slice(0, MAX_TOOL_ARG_VALUE_LENGTH - 3)}...`
+    }
     const formatArgs = (obj: any): string => {
       if (!obj || typeof obj !== "object") return ""
       const pairs = Object.entries(obj)
         .filter(([_, v]) => v !== undefined && v !== null && v !== "")
         .map(([k, v]) => {
-          const val = typeof v === "string" 
-            ? (v.length > 40 ? v.slice(0, 40) + "..." : v)
-            : JSON.stringify(v)
-          return `${k}=${val}`
+          const serialized = typeof v === "string" ? v : String(JSON.stringify(v) ?? v)
+          return `${k}=${truncateValue(k, serialized)}`
         })
         .slice(0, 3)  // Max 3 params
       return pairs.join(", ")
