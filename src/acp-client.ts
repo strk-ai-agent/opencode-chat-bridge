@@ -122,6 +122,13 @@ export class ACPClient extends EventEmitter {
   private toolOutputSeen = new Map<string, number>()
   // Track tool calls we already emitted activity for (dedup)
   private toolActivityEmitted = new Set<string>()
+  // Briefly defer argument-less starts because some ACP backends provide
+  // rawInput in the immediately following in_progress update.
+  private pendingToolActivity = new Map<string, {
+    toolName: string
+    args: any
+    timer: ReturnType<typeof setTimeout>
+  }>()
   
   constructor(options: ACPClientOptions = {}) {
     super()
@@ -429,6 +436,7 @@ export class ACPClient extends EventEmitter {
   }
   
   async disconnect(): Promise<void> {
+    this.clearPendingToolActivities()
     if (this.acp) {
       this.acp.kill()
       this.acp = null
@@ -628,17 +636,7 @@ export class ACPClient extends EventEmitter {
         })
         this.emit("tool", { name: toolNameInit, status: "pending", args: toolArgsInit })
         const initialToolCallId = update.toolCallId || toolNameInit
-        if (!this.toolActivityEmitted.has(initialToolCallId)) {
-          this.toolActivityEmitted.add(initialToolCallId)
-          const initialActivity = this.formatToolActivity(toolNameInit, toolArgsInit, "start")
-          this.emit("activity", {
-            type: "tool_start",
-            tool: initialActivity.toolName,
-            message: `${initialActivity.description} [${initialActivity.toolName}]`,
-            description: initialActivity.description,
-            details: toolArgsInit,
-          })
-        }
+        this.queueToolStartActivity(initialToolCallId, toolNameInit, toolArgsInit)
         break
         
       case "tool_call_update":
@@ -666,17 +664,7 @@ export class ACPClient extends EventEmitter {
           
           // Emit human-readable activity event -- only once per tool call
           const tcId = update.toolCallId || toolNameUpdate
-          if (!this.toolActivityEmitted.has(tcId)) {
-            this.toolActivityEmitted.add(tcId)
-            const activity = this.formatToolActivity(toolNameUpdate, toolArgsUpdate, "start")
-            this.emit("activity", {
-              type: "tool_start",
-              tool: activity.toolName,
-              message: `${activity.description} [${activity.toolName}]`,
-              description: activity.description,
-              details: toolArgsUpdate,
-            })
-          }
+          this.queueToolStartActivity(tcId, toolNameUpdate, toolArgsUpdate)
           
           // Stream partial output if available (e.g., bash stdout during execution)
           // rawOutput.output is CUMULATIVE - compute actual delta
@@ -709,6 +697,7 @@ export class ACPClient extends EventEmitter {
         if (update.status === "completed") {
           // Clean up output tracking for this tool call
           const toolCallId = update.toolCallId || toolNameUpdate
+          this.flushToolStartActivity(toolCallId, toolNameUpdate)
           this.toolOutputSeen.delete(toolCallId)
           
           // Get result from content or rawOutput
@@ -755,6 +744,7 @@ export class ACPClient extends EventEmitter {
         if (update.status === "failed") {
           // Clean up output tracking for this tool call
           const failedToolCallId = update.toolCallId || toolNameUpdate
+          this.flushToolStartActivity(failedToolCallId, toolNameUpdate)
           this.toolOutputSeen.delete(failedToolCallId)
           
           let errorMsg = "Tool execution failed"
@@ -797,6 +787,77 @@ export class ACPClient extends EventEmitter {
     }
   }
   
+  private hasToolArguments(args: any): boolean {
+    if (!args || typeof args !== "object" || Array.isArray(args)) return false
+    return Object.values(args).some((value) =>
+      value !== undefined && value !== null && value !== ""
+    )
+  }
+
+  private emitToolStartActivity(toolCallId: string, toolName: string, args: any): void {
+    if (this.toolActivityEmitted.has(toolCallId)) return
+
+    const pending = this.pendingToolActivity.get(toolCallId)
+    if (pending) {
+      clearTimeout(pending.timer)
+      this.pendingToolActivity.delete(toolCallId)
+    }
+
+    this.toolActivityEmitted.add(toolCallId)
+    const activity = this.formatToolActivity(toolName, args, "start")
+    this.emit("activity", {
+      type: "tool_start",
+      tool: activity.toolName,
+      message: `${activity.description} [${activity.toolName}]`.trim(),
+      description: activity.description,
+      details: args,
+    })
+  }
+
+  private queueToolStartActivity(toolCallId: string, toolName: string, args: any): void {
+    if (this.toolActivityEmitted.has(toolCallId)) return
+
+    if (this.hasToolArguments(args)) {
+      this.emitToolStartActivity(toolCallId, toolName, args)
+      return
+    }
+
+    const existing = this.pendingToolActivity.get(toolCallId)
+    if (existing) {
+      existing.toolName = toolName
+      existing.args = args
+      return
+    }
+
+    const pending = {
+      toolName,
+      args,
+      timer: setTimeout(() => {
+        const current = this.pendingToolActivity.get(toolCallId)
+        if (!current) return
+        this.emitToolStartActivity(toolCallId, current.toolName, current.args)
+      }, 750),
+    }
+    this.pendingToolActivity.set(toolCallId, pending)
+  }
+
+  private flushToolStartActivity(toolCallId: string, fallbackToolName: string): void {
+    if (this.toolActivityEmitted.has(toolCallId)) return
+    const pending = this.pendingToolActivity.get(toolCallId)
+    this.emitToolStartActivity(
+      toolCallId,
+      pending?.toolName || fallbackToolName,
+      pending?.args || {}
+    )
+  }
+
+  private clearPendingToolActivities(): void {
+    for (const pending of this.pendingToolActivity.values()) {
+      clearTimeout(pending.timer)
+    }
+    this.pendingToolActivity.clear()
+  }
+
   // Format tool calls into human-readable activity messages
   // Generic: shows tool name and compact args for any tool
   private formatToolActivity(tool: string, args: any, phase: "start" | "end"): { description: string; toolName: string } {

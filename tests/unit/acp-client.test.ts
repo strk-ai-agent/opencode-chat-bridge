@@ -31,6 +31,61 @@ describe("ACPClient session updates", () => {
     expect(updates).toEqual(["tool_call", "tool_result"])
   })
 
+  test("prefers arguments from an immediate in-progress update", () => {
+    const client = new ACPClient()
+    const activity: Array<{ tool?: string; description?: string }> = []
+    client.on("activity", (event) => {
+      if (event.type === "tool_start") activity.push(event)
+    })
+
+    ;(client as any).handleSessionUpdate({
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-search",
+        title: "websearch",
+      },
+    })
+    ;(client as any).handleSessionUpdate({
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-search",
+        title: "Exa Web Search",
+        status: "in_progress",
+        rawInput: { query: "current time in Barcelona", numResults: 5 },
+      },
+    })
+
+    expect(activity).toHaveLength(1)
+    expect(activity[0].tool).toBe("Exa Web Search")
+    expect(activity[0].description).toContain("query=current time in Barcelona")
+    expect(activity[0].description).toContain("numResults=5")
+  })
+
+  test("flushes an argument-less tool start when the tool completes", () => {
+    const client = new ACPClient()
+    const activity: Array<{ type: string; tool?: string }> = []
+    client.on("activity", (event) => activity.push(event))
+
+    ;(client as any).handleSessionUpdate({
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-no-args",
+        title: "status",
+      },
+    })
+    ;(client as any).handleSessionUpdate({
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-no-args",
+        title: "status",
+        status: "completed",
+      },
+    })
+
+    expect(activity.map((event) => event.type)).toEqual(["tool_start", "tool_end"])
+    expect(activity[0].tool).toBe("status")
+  })
+
   test("ignores unknown update variants", () => {
     const client = new ACPClient()
     expect(() => (client as any).handleSessionUpdate({
