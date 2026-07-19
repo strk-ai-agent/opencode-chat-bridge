@@ -15,6 +15,7 @@ Bridge ACP-compatible agents such as [OpenCode](https://opencode.ai) and [Ferrum
 ## Table of Contents
 
 - [Connectors](#connectors) -- Matrix, Slack, WhatsApp, Mattermost, Discord, Telegram, Web
+- [Deployment Model](#deployment-model)
 - [Quick Start](#quick-start)
 - [Usage](#usage)
 - [ACP Backends](#acp-backends)
@@ -69,14 +70,25 @@ Embeddable chat widget for any webpage. Two modes: **widget** (floating bubble +
 
 > **Note:** The web widget has no built-in user authentication. It is designed for private networks, VPNs, or behind a reverse proxy with auth. See [Security](docs/SECURITY.md#web-connector-security) for details.
 
+## Deployment Model
+
+OpenCode Chat Bridge runs as a bot service from a project checkout or container.
+
+The operator installs the project dependencies, configures a connector, and
+runs its process. Each connector process serves its chat platform and can
+accept multiple users. Use `allowedUsers` to restrict access.
+
+`bun install` installs the dependencies required by the bridge into the project
+checkout.
+
 ## Quick Start
 
 ```bash
 git clone https://github.com/ominiverdi/opencode-chat-bridge
 cd opencode-chat-bridge
-bun install
-cp .env.example .env                       # Edit with your credentials
-cp chat-bridge.json.example chat-bridge.json # Edit local bridge config
+bun install  # Install project dependencies
+cp .env.example .env  # Edit with your credentials
+test -e chat-bridge.json || cp chat-bridge.json.example chat-bridge.json
 ```
 
 Run a connector:
