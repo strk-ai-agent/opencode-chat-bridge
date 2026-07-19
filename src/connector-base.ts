@@ -410,6 +410,7 @@ export abstract class BaseConnector<TSession extends BaseSession> {
   private acpConfig: ACPConfig
   private sessionPickerConfig = getConfig().sessionPicker
   private acpSessionStore: ACPSessionStore
+  private verboseErrors: boolean
   private pickerProjects = new Map<string, ProjectPickerItem[]>()
   private selectedProjectCwd = new Map<string, string>()
   private pickerSessions = new Map<string, ACPSessionInfo[]>()
@@ -424,6 +425,7 @@ export abstract class BaseConnector<TSession extends BaseSession> {
     this.acpConfig = globalConfig.acp
     this.sessionPickerConfig = globalConfig.sessionPicker
     this.acpSessionStore = new ACPSessionStore(globalConfig.sessionStorePath)
+    this.verboseErrors = globalConfig.verboseErrors
     
     // Apply SESSION_RETENTION_MINS from env if not set in config
     if (this.config.sessionRetentionMins === undefined) {
@@ -460,6 +462,17 @@ export abstract class BaseConnector<TSession extends BaseSession> {
   
   protected logError(message: string, ...args: any[]): void {
     console.error(`[${this.logPrefix}] ${message}`, ...args)
+  }
+
+  /**
+   * Build a user-facing error message.
+   * When verboseErrors is enabled the original error is appended so the user
+   * can see what went wrong; otherwise a generic friendly string is returned.
+   */
+  protected userErrorMessage(generic: string, err: unknown): string {
+    if (!this.verboseErrors) return generic
+    const detail = err instanceof Error ? err.message : String(err)
+    return `${generic}\n${detail}`
   }
   
   /**
@@ -962,7 +975,7 @@ export abstract class BaseConnector<TSession extends BaseSession> {
       await sendFn(message)
     } catch (err) {
       this.logError("Failed to list ACP projects:", err)
-      await sendFn("Could not list saved ACP sessions.")
+      await sendFn(this.userErrorMessage("Could not list saved ACP sessions.", err))
     } finally {
       try {
         await client.disconnect()
@@ -1048,7 +1061,7 @@ export abstract class BaseConnector<TSession extends BaseSession> {
           await client.disconnect()
         } catch {}
         const keepCurrent = existing ? " Keeping the current session attached." : ""
-        await sendFn(`Could not load selected session.${keepCurrent}`)
+        await sendFn(this.userErrorMessage(`Could not load selected session.${keepCurrent}`, err))
       }
 
       return true
@@ -1079,7 +1092,7 @@ export abstract class BaseConnector<TSession extends BaseSession> {
       return message
     } catch (err) {
       this.logError("Failed to list ACP sessions:", err)
-      return "Could not list saved sessions for this project."
+      return this.userErrorMessage("Could not list saved sessions for this project.", err)
     } finally {
       try {
         await client.disconnect()
@@ -1287,7 +1300,7 @@ export abstract class BaseConnector<TSession extends BaseSession> {
       try {
         await client.disconnect()
       } catch {}
-      await sendFn("Could not reload current session.")
+      await sendFn(this.userErrorMessage("Could not reload current session.", err))
     }
 
     return true
