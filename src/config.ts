@@ -109,13 +109,19 @@ export interface SessionPickerConfig {
   mirrorIntervalSeconds: number
 }
 
+export type ToolMessageMode = "off" | "events" | "status" | "trace"
+
 export interface ToolMessagesConfig {
-  /** Send tool call notices to the chat channel. */
+  /** Tool-call presentation. Defaults to one immutable message per call. */
+  mode?: ToolMessageMode
+  /** Legacy switch for tool call notices. False always resolves to mode "off". */
   showCalls: boolean
   /** Include compact tool arguments in call notices. */
   showArguments: boolean
   /** Tool name substrings whose output is forwarded to chat. */
   showOutputFor: string[]
+  /** Maximum tool calls retained in an editable trace message. */
+  maxTraceEntries?: number
 }
 
 export interface ChatBridgeConfig {
@@ -144,9 +150,11 @@ const defaultConfig: ChatBridgeConfig = {
   sessionStorePath: "./.opencode/chat-sessions.json",
   defaultAgent: null,
   toolMessages: {
+    mode: "events",
     showCalls: true,
     showArguments: false,
     showOutputFor: ["bash"],
+    maxTraceEntries: 20,
   },
   sessionPicker: {
     enabled: false,
