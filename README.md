@@ -83,8 +83,6 @@ accept multiple users. Use `allowedUsers` to restrict access.
 `bun install` installs the dependencies required by the bridge into the project
 checkout.
 
-For persistent server deployments with systemd, see [System-Wide Installation](docs/SYSTEM_INSTALL.md).
-
 ## Quick Start
 
 ```bash
@@ -410,9 +408,6 @@ Reference:
 - [Security](docs/SECURITY.md)
 - [Debugging](docs/DEBUGGING.md)
 - [Contributing](docs/CONTRIBUTING.md)
-
-Deployment:
-- [System-Wide Installation](docs/SYSTEM_INSTALL.md) -- systemd services, system user, persistent deployment
 - [Docker Setup](docs/DOCKER_SETUP.md)
 
 ## See Also
