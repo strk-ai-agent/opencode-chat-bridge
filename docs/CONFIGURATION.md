@@ -443,9 +443,11 @@ these settings affect presentation only.
   beginning. Arguments can contain local paths, queries, URLs, or other
   sensitive input, so the default is `false`.
 - `showOutputFor` lists tool-name substrings whose output is returned to chat.
-  The default `["bash"]` provides progress from shell commands. Use an empty
-  list to suppress all direct tool output. This setting is independent from
-  `mode`; `mode: "off"` can still forward selected output.
+  The default `["bash"]` provides progress from shell commands. Use `["*"]` to
+  return output from every tool, or an empty list to suppress all direct tool
+  output. Forwarding all output can expose sensitive tool results and create
+  substantial chat traffic. This setting is independent from `mode`;
+  `mode: "off"` can still forward selected output.
 - `maxTraceEntries` bounds each `trace` message. Longer traces continue in
   additional editable messages without discarding earlier calls.
 

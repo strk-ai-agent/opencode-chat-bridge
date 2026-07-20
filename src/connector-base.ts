@@ -241,7 +241,10 @@ export function shouldShowToolOutput(
   toolName: string,
   options: ToolMessagesConfig
 ): boolean {
-  return options.showOutputFor.some((name) => toolName.includes(name))
+  return options.showOutputFor.some((name) => {
+    const selector = name.trim()
+    return selector === "*" || (selector.length > 0 && toolName.includes(selector))
+  })
 }
 
 // =============================================================================

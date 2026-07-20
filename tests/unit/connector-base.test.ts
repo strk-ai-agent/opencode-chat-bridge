@@ -238,6 +238,26 @@ describe("tool message presentation", () => {
     expect(shouldShowToolOutput("mcp__time__get_current_time", options)).toBe(true)
     expect(shouldShowToolOutput("read", options)).toBe(false)
   })
+
+  test("matches all tool output with the wildcard selector", () => {
+    const options = {
+      showCalls: true,
+      showArguments: false,
+      showOutputFor: ["*"],
+    }
+    expect(shouldShowToolOutput("bash", options)).toBe(true)
+    expect(shouldShowToolOutput("read", options)).toBe(true)
+    expect(shouldShowToolOutput("mcp__time__get_current_time", options)).toBe(true)
+  })
+
+  test("ignores empty tool output selectors", () => {
+    const options = {
+      showCalls: true,
+      showArguments: false,
+      showOutputFor: ["", "   "],
+    }
+    expect(shouldShowToolOutput("bash", options)).toBe(false)
+  })
 })
 
 // =============================================================================
