@@ -220,7 +220,7 @@ chat-bridge
 chat-bridge "What time is it?"
 ```
 
-**Connectors** are not launched by the global CLI. To run a chat connector (Matrix, Slack, etc.), either clone the repository and use `bun connectors/<name>.ts`, or use [Docker](docs/DOCKER_SETUP.md) or [systemd](docs/SYSTEM_INSTALL.md) for persistent deployments.
+**Connectors** are not launched by the global CLI. To run a chat connector (Matrix, Slack, etc.), either clone the repository and use `bun connectors/<name>.ts`, or use [Docker](docs/DOCKER_SETUP.md) for persistent deployments.
 
 ## Usage
 
