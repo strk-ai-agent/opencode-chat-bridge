@@ -3,10 +3,14 @@
   "version": "0.5.0",
   "description": "Bridge OpenCode AI to chat platforms (Matrix, Slack, WhatsApp, Mattermost, Discord, Telegram, Web) with secure permission-based tool access",
   "type": "module",
+  "bin": {
+    "chat-bridge": "src/cli.ts"
+  },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
     "dist",
+    "src",
     "README.md"
   ],
   "scripts": {
