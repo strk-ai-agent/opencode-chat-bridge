@@ -118,13 +118,16 @@ class WebConnector extends BaseConnector<WebSession> {
     this.logStartup()
     await this.cleanupSessions()
 
-    // Load widget JS source
+    // Load the safe message renderer before the widget runtime.
+    const rendererPath = join(import.meta.dir, "web-message-renderer.js")
     const widgetPath = join(import.meta.dir, "web-widget.js")
-    if (!existsSync(widgetPath)) {
-      console.error(`Error: Widget file not found at ${widgetPath}`)
+    if (!existsSync(rendererPath) || !existsSync(widgetPath)) {
+      console.error(`Error: Widget source files not found in ${import.meta.dir}`)
       process.exit(1)
     }
-    this.widgetSource = readFileSync(widgetPath, "utf-8")
+    this.widgetSource = [rendererPath, widgetPath]
+      .map((filePath) => readFileSync(filePath, "utf-8"))
+      .join("\n")
 
     const connector = this
     this.server = Bun.serve<WSData>({

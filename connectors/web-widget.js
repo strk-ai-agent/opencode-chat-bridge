@@ -74,6 +74,8 @@
   var reconnAttempts = 0
   var reconnTimer = null
   var curBotEl = null // DOM element currently receiving streamed chunks
+  var curBotText = "" // Raw streamed text; re-rendered after every chunk
+  var curBotSupplementalText = "" // File labels previously included by textContent persistence
   var pendingMessage = null // queued when sending while disconnected
 
   // DOM refs
@@ -165,6 +167,9 @@
       ".oc-msg{max-width:85%;padding:10px 14px;border-radius:12px;word-wrap:break-word;white-space:pre-wrap;font-size:14px;}",
       ".oc-msg--user{align-self:flex-end;background:" + CFG.userBg + ";color:" + CFG.userText + ";border-bottom-right-radius:4px;}",
       ".oc-msg--bot{align-self:flex-start;background:" + CFG.botBg + ";color:" + CFG.botText + ";border-bottom-left-radius:4px;}",
+      ".oc-msg-text>p+*,.oc-msg-text>pre+*,.oc-msg-text>ul+*,.oc-msg-text>ol+*,.oc-msg-text>h1+*,.oc-msg-text>h2+*,.oc-msg-text>h3+*,.oc-msg-text>h4+*,.oc-msg-text>h5+*,.oc-msg-text>h6+*{margin-top:8px;}",
+      ".oc-msg-text h1{font-size:1.5em}.oc-msg-text h2{font-size:1.35em}.oc-msg-text h3{font-size:1.2em}.oc-msg-text h4,.oc-msg-text h5,.oc-msg-text h6{font-size:1.05em}",
+      ".oc-msg-text ul,.oc-msg-text ol{padding-left:20px;}.oc-msg-text pre{padding:8px;background:rgba(15,23,42,.08);border-radius:6px;overflow-x:auto;white-space:pre-wrap;}.oc-msg-text code{font-family:monospace;}.oc-msg-text a{color:#2563eb;text-decoration:underline;overflow-wrap:anywhere;}",
 
       // --- Activity ---
       ".oc-activity{align-self:flex-start;font-size:12px;color:#6b7280;background:#f3f4f6;padding:6px 10px;border-left:3px solid #9ca3af;border-radius:4px;font-family:monospace;margin:4px 0;}",
@@ -353,9 +358,26 @@
 
     var el = document.createElement("div")
     el.className = "oc-msg oc-msg--" + role
-    el.textContent = text
+    if (role === "bot") {
+      var textEl = document.createElement("div")
+      textEl.className = "oc-msg-text"
+      window.OpenCodeMessageRenderer.render(textEl, text, document)
+      el.appendChild(textEl)
+    } else {
+      el.textContent = text
+    }
     msgsEl.insertBefore(el, thinkingEl)
     return el
+  }
+
+  function renderBotText(bubbleElement, text) {
+    var textElement = bubbleElement.querySelector(".oc-msg-text")
+    if (!textElement) {
+      textElement = document.createElement("div")
+      textElement.className = "oc-msg-text"
+      bubbleElement.insertBefore(textElement, bubbleElement.firstChild)
+    }
+    window.OpenCodeMessageRenderer.render(textElement, text, document)
   }
 
   // ==========================================================================
@@ -559,8 +581,11 @@
         hideThinking()
         if (!curBotEl) {
           curBotEl = appendBubble("bot", "")
+          curBotText = ""
+          curBotSupplementalText = ""
         }
-        curBotEl.textContent += d.text
+        curBotText += d.text
+        renderBotText(curBotEl, curBotText)
         scrollDown()
         break
 
@@ -591,7 +616,11 @@
 
       case "image":
         hideThinking()
-        if (!curBotEl) curBotEl = appendBubble("bot", "")
+        if (!curBotEl) {
+          curBotEl = appendBubble("bot", "")
+          curBotText = ""
+          curBotSupplementalText = ""
+        }
         var img = document.createElement("img")
         img.src = "data:" + (d.mimeType || "image/png") + ";base64," + d.data
         img.alt = d.alt || "Image"
@@ -601,11 +630,16 @@
 
       case "file":
         hideThinking()
-        if (!curBotEl) curBotEl = appendBubble("bot", "")
+        if (!curBotEl) {
+          curBotEl = appendBubble("bot", "")
+          curBotText = ""
+          curBotSupplementalText = ""
+        }
         var link = document.createElement("a")
         link.href = "data:" + (d.mimeType || "application/octet-stream") + ";base64," + d.data
         link.download = d.fileName || "file"
         link.textContent = d.fileName || "Download file"
+        curBotSupplementalText += link.textContent
         link.style.cssText = "display:inline-block;padding:8px 12px;background:#e2e8f0;border-radius:8px;color:#1e293b;text-decoration:none;font-size:13px;margin-top:6px;"
         curBotEl.appendChild(link)
         scrollDown()
@@ -618,12 +652,15 @@
           // Move bot text bubble to the bottom (after activities) so it's visible
           msgsEl.insertBefore(curBotEl, thinkingEl)
           scrollDown()
-          if (curBotEl.textContent) {
-            messages.push({ role: "bot", text: curBotEl.textContent, ts: Date.now() })
+          var persistedText = curBotText + curBotSupplementalText
+          if (persistedText) {
+            messages.push({ role: "bot", text: persistedText, ts: Date.now() })
             saveState()
           }
         }
         curBotEl = null
+        curBotText = ""
+        curBotSupplementalText = ""
         isProcessing = false
         sendBtn.disabled = false
         break
@@ -633,6 +670,8 @@
         clearActivity()
         addMsg("bot", d.text)
         curBotEl = null
+        curBotText = ""
+        curBotSupplementalText = ""
         isProcessing = false
         sendBtn.disabled = false
         break
@@ -642,6 +681,8 @@
         clearActivity()
         addMsg("bot", d.message || "An error occurred.")
         curBotEl = null
+        curBotText = ""
+        curBotSupplementalText = ""
         isProcessing = false
         sendBtn.disabled = false
         break

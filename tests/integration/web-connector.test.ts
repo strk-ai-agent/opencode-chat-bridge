@@ -84,6 +84,8 @@ describe("web connector HTTP", () => {
 
     const js = await res.text()
     expect(js).toContain("OpenCode Chat Bridge")
+    expect(js).toContain("OpenCodeMessageRenderer")
+    expect(js.indexOf("OpenCodeMessageRenderer")).toBeLessThan(js.indexOf("__ocWidgetLoaded"))
     expect(js).toContain("__ocWidgetLoaded")
     expect(js).toContain('case "activity_update"')
   })
