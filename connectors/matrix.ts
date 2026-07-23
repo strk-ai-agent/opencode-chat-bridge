@@ -97,7 +97,7 @@ import {
   buildThreadRelation,
   shouldHandleThreadReply,
 } from "./matrix-thread-helpers"
-import { diagnoseEmptyResponse } from "./matrix-response-diagnostics"
+import { diagnoseEmptyResponse } from "../src/acp-response-diagnostics"
 
 // =============================================================================
 // Session Type

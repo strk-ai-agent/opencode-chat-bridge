@@ -423,7 +423,10 @@ export class ACPClient extends EventEmitter {
     }
     
     try {
-      await this.send("session/prompt", params)
+      const result = await this.send("session/prompt", params)
+      if (result?.error) {
+        throw new Error(`ACP prompt failed: ${JSON.stringify(result.error)}`)
+      }
       dbg(`PROMPT_SEND_DONE total=${responseText.length}`)
       
       // Drain: the JSON-RPC response can arrive before trailing session/update

@@ -147,3 +147,17 @@ describe("ACPClient session updates", () => {
     })).not.toThrow()
   })
 })
+
+describe("ACPClient prompt errors", () => {
+  test("rejects JSON-RPC prompt errors", async () => {
+    const client = new ACPClient()
+    ;(client as any).sessionId = "session-1"
+    ;(client as any).send = async () => ({
+      error: { code: -32000, message: "backend failed" },
+    })
+
+    await expect(client.prompt("test")).rejects.toThrow(
+      'ACP prompt failed: {"code":-32000,"message":"backend failed"}',
+    )
+  })
+})

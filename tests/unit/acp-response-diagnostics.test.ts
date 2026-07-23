@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
-import { diagnoseEmptyResponse } from "../../connectors/matrix-response-diagnostics"
+import { diagnoseEmptyResponse } from "../../src/acp-response-diagnostics"
 
-describe("Matrix empty ACP response diagnostics", () => {
+describe("empty ACP response diagnostics", () => {
   test("identifies an ACP response with no text updates", () => {
     expect(diagnoseEmptyResponse("", "", "")).toEqual({
       source: "acp-no-text",

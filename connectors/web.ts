@@ -42,6 +42,7 @@ import {
   extractDocPaths,
   removeDocMarkers,
 } from "../src"
+import { diagnoseEmptyResponse } from "../src/acp-response-diagnostics"
 
 // =============================================================================
 // Configuration
@@ -95,7 +96,7 @@ interface WSData {
 // WebConnector
 // =============================================================================
 
-class WebConnector extends BaseConnector<WebSession> {
+export class WebConnector extends BaseConnector<WebSession> {
   private server: Server | null = null
   private wsClients = new Map<string, ServerWebSocket<WSData>>()
   private widgetSource = ""
@@ -349,163 +350,292 @@ class WebConnector extends BaseConnector<WebSession> {
       })
       return
     }
-    this.markQueryActive(clientId)
 
-    const session = await this.getOrCreateSession(
-      clientId,
-      (client) => ({ ...this.createBaseSession(client) }) as WebSession,
-    )
+    let activeClient: ACPClient | null = null
+    const queryHandle = this.markQueryActive(clientId, () => activeClient?.cancel())
+    const createSession = (client: ACPClient) => ({ ...this.createBaseSession(client) }) as WebSession
+    let initialSession: WebSession | null
+    try {
+      initialSession = await this.getOrCreateSession(clientId, createSession)
+    } catch (err) {
+      this.logError(`[FAIL] ${clientId.slice(0, 8)}... creating session:`, err)
+      this.wsSend(clientId, { type: "error", message: "Could not connect to AI service." })
+      this.wsSend(clientId, { type: "done" })
+      this.markQueryDone(clientId, queryHandle)
+      return
+    }
 
-    if (!session) {
+    if (!initialSession) {
       this.wsSend(clientId, {
         type: "error",
         message: "Could not connect to AI service.",
       })
-      this.markQueryDone(clientId)
+      this.markQueryDone(clientId, queryHandle)
       return
     }
 
-    session.messageCount++
-    session.lastActivity = new Date()
-    session.inputChars += query.length
-
-    const client = session.client
-    let buf = ""
-    let toolResultsBuf = ""
-    let tools = 0
-    let activitySequence = 0
-    const toolActivity = new ToolActivityController(config.toolMessages, {
-      create: async (message) => {
-        const activityId = `${clientId}-${Date.now()}-${++activitySequence}`
-        this.wsSend(clientId, { type: "activity", activityId, message })
-        return activityId
-      },
-      update: async (activityId, message) => {
-        this.wsSend(clientId, { type: "activity_update", activityId, message })
-      },
-    }, {
-      sendEvent: async (message) => { this.wsSend(clientId, { type: "activity", message }) },
-      onToolStart: () => { tools++ },
-    })
-
-    const onChunk = (text: string) => {
-      buf += text
-      this.wsSend(clientId, { type: "chunk", text })
-    }
-
-    const onImage = (img: any) => {
-      const size = img.data ? img.data.length : 0
-      this.log(`[IMG] Base64 image received: ${img.mimeType || "unknown"} (${size} chars)`)
-      this.wsSend(clientId, {
-        type: "image",
-        data: img.data,
-        mimeType: img.mimeType || "image/png",
-        alt: img.alt,
+    const runAttempt = async (session: WebSession) => {
+      const client = session.client
+      activeClient = client
+      let buf = ""
+      let toolResultsBuf = ""
+      let tools = 0
+      let hadToolActivity = false
+      let images = 0
+      let chunks = 0
+      let activitySequence = 0
+      const toolActivity = new ToolActivityController(config.toolMessages, {
+        create: async (message) => {
+          const activityId = `${clientId}-${Date.now()}-${++activitySequence}`
+          this.wsSend(clientId, { type: "activity", activityId, message })
+          return activityId
+        },
+        update: async (activityId, message) => {
+          this.wsSend(clientId, { type: "activity_update", activityId, message })
+        },
+      }, {
+        sendEvent: async (message) => { this.wsSend(clientId, { type: "activity", message }) },
+        onToolStart: () => {
+          hadToolActivity = true
+          tools++
+        },
       })
-    }
 
-    const onUpdate = (update: any) => {
-      // Collect tool results for image/doc extraction
-      if (update.type === "tool_result" && update.toolResult) {
-        toolResultsBuf += JSON.stringify(update.toolResult)
+      const onChunk = (text: string) => {
+        chunks++
+        buf += text
+        this.wsSend(clientId, { type: "chunk", text })
+      }
 
-        // Show tool results for configured tools (e.g. bash output)
-        const toolName = update.toolName || ""
-        const shouldShow = shouldShowToolOutput(toolName, config.toolMessages)
-        if (shouldShow) {
-          const maxLen = 2000
-          const result = update.toolResult.length > maxLen
-            ? update.toolResult.slice(0, maxLen) + "\n... (truncated)"
-            : update.toolResult
-          const trimmed = result.trim()
-          if (trimmed) {
-            this.wsSend(clientId, { type: "tool_result", tool: toolName, text: trimmed })
+      const onImage = (img: any) => {
+        images++
+        const size = img.data ? img.data.length : 0
+        this.log(`[IMG] Base64 image received: ${img.mimeType || "unknown"} (${size} chars)`)
+        this.wsSend(clientId, {
+          type: "image",
+          data: img.data,
+          mimeType: img.mimeType || "image/png",
+          alt: img.alt,
+        })
+      }
+
+      const onUpdate = (update: any) => {
+        if (update.type === "tool_result" && update.toolResult) {
+          hadToolActivity = true
+          toolResultsBuf += JSON.stringify(update.toolResult)
+
+          const toolName = update.toolName || ""
+          if (shouldShowToolOutput(toolName, config.toolMessages)) {
+            const maxLen = 2000
+            const result = update.toolResult.length > maxLen
+              ? update.toolResult.slice(0, maxLen) + "\n... (truncated)"
+              : update.toolResult
+            const trimmed = result.trim()
+            if (trimmed) {
+              this.wsSend(clientId, { type: "tool_result", tool: toolName, text: trimmed })
+            }
+          }
+        }
+
+        if (update.type === "tool_output_delta" && update.partialOutput) {
+          hadToolActivity = true
+          const toolName = update.toolName || ""
+          if (shouldShowToolOutput(toolName, config.toolMessages)) {
+            const output = update.partialOutput.trim()
+            if (output) {
+              this.wsSend(clientId, { type: "tool_output", tool: toolName, text: output })
+            }
           }
         }
       }
 
-      // Stream partial tool output in real-time (e.g. long bash commands)
-      if (update.type === "tool_output_delta" && update.partialOutput) {
-        const toolName = update.toolName || ""
-        const shouldStream = shouldShowToolOutput(toolName, config.toolMessages)
-        if (shouldStream) {
-          const output = update.partialOutput.trim()
-          if (output) {
-            this.wsSend(clientId, { type: "tool_output", tool: toolName, text: output })
-          }
-        }
+      const onPermission = (event: { permission: string; path: string | null; message: string }) => {
+        hadToolActivity = true
+        this.log(`[PERMISSION] Rejected: ${event.permission}${event.path ? ` (${event.path})` : ""}`)
+        this.wsSend(clientId, { type: "permission_denied", message: event.message })
+      }
+
+      client.on("chunk", onChunk)
+      client.on("activity", toolActivity.handleActivity)
+      client.on("tool_activity", toolActivity.handleRevision)
+      client.on("image", onImage)
+      client.on("update", onUpdate)
+      client.on("permission_rejected", onPermission)
+
+      const queryTimeoutMs = 5 * 60 * 1000
+      let queryTimeout: ReturnType<typeof setTimeout> | null = null
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        queryTimeout = setTimeout(() => {
+          client.cancel()
+          reject(new Error("Request timed out"))
+        }, queryTimeoutMs)
+      })
+
+      let acpResponse = ""
+      let error: unknown = null
+      try {
+        acpResponse = await Promise.race([client.prompt(query), timeoutPromise])
+      } catch (err) {
+        error = err
+      } finally {
+        if (queryTimeout) clearTimeout(queryTimeout)
+        await toolActivity.flush()
+        client.off("chunk", onChunk)
+        client.off("activity", toolActivity.handleActivity)
+        client.off("tool_activity", toolActivity.handleRevision)
+        client.off("image", onImage)
+        client.off("update", onUpdate)
+        client.off("permission_rejected", onPermission)
+      }
+
+      return {
+        acpResponse,
+        buf,
+        toolResultsBuf,
+        tools,
+        hadToolActivity,
+        images,
+        chunks,
+        error,
       }
     }
 
-    const onPermission = (event: { permission: string; path: string | null; message: string }) => {
-      this.log(`[PERMISSION] Rejected: ${event.permission}${event.path ? ` (${event.path})` : ""}`)
-      this.wsSend(clientId, { type: "permission_denied", message: event.message })
+    const cleanAttempt = (attempt: Awaited<ReturnType<typeof runAttempt>>) =>
+      sanitizeServerPaths(removeDocMarkers(removeImageMarkers(attempt.buf)))
+
+    const logAttemptFailure = (
+      attemptNumber: number,
+      attempt: Awaited<ReturnType<typeof runAttempt>>,
+      diagnostic: ReturnType<typeof diagnoseEmptyResponse>,
+    ) => {
+      if (attempt.error) {
+        const detail = attempt.error instanceof Error ? attempt.error.message : String(attempt.error)
+        this.log(
+          `[ACP] Failed attempt=${attemptNumber} error=${detail} chunks=${attempt.chunks} ` +
+          `bridgeChars=${attempt.buf.length} tools=${attempt.tools} ` +
+          `toolActivity=${attempt.hadToolActivity} images=${attempt.images} [${clientId}]`,
+        )
+        return
+      }
+      if (diagnostic) {
+        this.log(
+          `[ACP] Empty response attempt=${attemptNumber} source=${diagnostic.source} ` +
+          `acpChars=${diagnostic.acpChars} bridgeChars=${diagnostic.bridgeChars} ` +
+          `cleanChars=${diagnostic.cleanChars} chunks=${attempt.chunks} tools=${attempt.tools} ` +
+          `toolActivity=${attempt.hadToolActivity} images=${attempt.images} [${clientId}]`,
+        )
+      }
     }
-
-    client.on("chunk", onChunk)
-    client.on("activity", toolActivity.handleActivity)
-    client.on("tool_activity", toolActivity.handleRevision)
-    client.on("image", onImage)
-    client.on("update", onUpdate)
-    client.on("permission_rejected", onPermission)
-
-    // Timeout to prevent stuck requests (5 minutes)
-    const QUERY_TIMEOUT_MS = 5 * 60 * 1000
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("Request timed out")), QUERY_TIMEOUT_MS)
-    )
 
     try {
-      await Promise.race([client.prompt(query), timeoutPromise])
+      let session = initialSession
+      session.messageCount++
+      session.lastActivity = new Date()
+      session.inputChars += query.length
 
-      // Scan all text for image/doc file paths
-      const allText = buf + "\n" + toolResultsBuf
+      let attempt = await runAttempt(session)
+      let clean = cleanAttempt(attempt)
+      let diagnostic = attempt.error
+        ? null
+        : diagnoseEmptyResponse(attempt.acpResponse, attempt.buf, clean)
 
-      // 1. DOCLIBRARY markers (from MCP tools)
+      if (diagnostic?.source === "bridge-capture-lost") {
+        this.log(
+          `[ACP] Captured response recovery attempt=1 acpChars=${diagnostic.acpChars} ` +
+          `bridgeChars=${diagnostic.bridgeChars} [${clientId}]`,
+        )
+        attempt.buf = attempt.acpResponse
+        clean = cleanAttempt(attempt)
+        diagnostic = diagnoseEmptyResponse(attempt.acpResponse, attempt.buf, clean)
+        if (!diagnostic) this.wsSend(clientId, { type: "chunk", text: attempt.acpResponse })
+      }
+
+      let failed = Boolean(attempt.error) || Boolean(diagnostic && attempt.images === 0)
+      if (failed) {
+        logAttemptFailure(1, attempt, diagnostic)
+        const safeToRetry = !attempt.hadToolActivity && attempt.images === 0 &&
+          attempt.buf.length === 0
+
+        if (safeToRetry) {
+          this.log(`[ACP] Retrying once with a fresh client/session [${clientId}]`)
+          const retrySession = await this.recreateACPSession(clientId, createSession)
+          if (!retrySession) throw new Error("Failed to create a fresh ACP session for retry")
+          session = retrySession
+          session.messageCount++
+          session.lastActivity = new Date()
+          session.inputChars += query.length
+
+          attempt = await runAttempt(session)
+          clean = cleanAttempt(attempt)
+          diagnostic = attempt.error
+            ? null
+            : diagnoseEmptyResponse(attempt.acpResponse, attempt.buf, clean)
+
+          if (diagnostic?.source === "bridge-capture-lost") {
+            this.log(
+              `[ACP] Captured response recovery attempt=2 acpChars=${diagnostic.acpChars} ` +
+              `bridgeChars=${diagnostic.bridgeChars} [${clientId}]`,
+            )
+            attempt.buf = attempt.acpResponse
+            clean = cleanAttempt(attempt)
+            diagnostic = diagnoseEmptyResponse(attempt.acpResponse, attempt.buf, clean)
+            if (!diagnostic) this.wsSend(clientId, { type: "chunk", text: attempt.acpResponse })
+          }
+
+          failed = Boolean(attempt.error) || Boolean(diagnostic && attempt.images === 0)
+          if (failed) logAttemptFailure(2, attempt, diagnostic)
+        }
+      }
+
+      if (failed) {
+        const sec = ((Date.now() - t0) / 1000).toFixed(1)
+        const reason = attempt.error ? "acp-error" : diagnostic?.source || "empty-response"
+        this.log(`[FAIL] ${clientId.slice(0, 8)}... ${sec}s reason=${reason}`)
+        this.wsSend(clientId, {
+          type: "error",
+          message: "The AI service completed without returning a usable response. Please try again.",
+        })
+        this.wsSend(clientId, { type: "done" })
+        return
+      }
+
+      const allText = attempt.buf + "\n" + attempt.toolResultsBuf
       const markerImages = new Set([
-        ...extractImagePaths(toolResultsBuf),
-        ...extractImagePaths(buf),
+        ...extractImagePaths(attempt.toolResultsBuf),
+        ...extractImagePaths(attempt.buf),
       ])
-
-      // 2. Bare file paths ending in image extensions (from bash etc.)
       const pathRegex = /\/[\w.\-\/]+\.(?:png|jpe?g|gif|webp|svg|bmp)/gi
       const pathMatches = allText.match(pathRegex) || []
-
-      // Combine and deduplicate
       const allImages = new Set([...markerImages, ...pathMatches])
       for (const imgPath of allImages) {
         const trimmed = imgPath.trim()
-        if (existsSync(trimmed)) {
-          this.sendFileAsImage(clientId, trimmed)
-        }
+        if (existsSync(trimmed)) this.sendFileAsImage(clientId, trimmed)
       }
 
-      // Documents: DOCLIBRARY markers + bare file paths
       const markerDocs = new Set([
-        ...extractDocPaths(toolResultsBuf),
-        ...extractDocPaths(buf),
+        ...extractDocPaths(attempt.toolResultsBuf),
+        ...extractDocPaths(attempt.buf),
       ])
       const docRegex = /\/[\w.\-\/]+\.(?:pdf|csv|txt|json|xml|html|md|zip|tar)/gi
       const docMatches = allText.match(docRegex) || []
       const allDocs = new Set([...markerDocs, ...docMatches])
       for (const docPath of allDocs) {
         const trimmed = docPath.trim()
-        if (existsSync(trimmed)) {
-          this.sendFileAsDoc(clientId, trimmed)
-        }
+        if (existsSync(trimmed)) this.sendFileAsDoc(clientId, trimmed)
       }
 
-      const clean = sanitizeServerPaths(removeDocMarkers(removeImageMarkers(buf)))
       session.outputChars += clean.length
-      if (!clean && tools > 0) {
-        this.wsSend(clientId, { type: "chunk", text: "He procesado la consulta pero no he podido generar una respuesta. Intentalo de nuevo." })
-      }
       this.wsSend(clientId, { type: "done" })
 
       const sec = ((Date.now() - t0) / 1000).toFixed(1)
-      const t = tools > 0 ? `, ${tools} tool${tools > 1 ? "s" : ""}` : ""
+      const toolInfo = attempt.tools > 0
+        ? `, ${attempt.tools} tool${attempt.tools > 1 ? "s" : ""}`
+        : ""
+      const imageInfo = attempt.images > 0
+        ? `, ${attempt.images} image${attempt.images > 1 ? "s" : ""}`
+        : ""
       this.log(
-        `[DONE] ${clientId.slice(0, 8)}... ${sec}s (${clean.length} chars${t})`,
+        `[DONE] ${clientId.slice(0, 8)}... ${sec}s (${clean.length} chars${toolInfo}${imageInfo})`,
       )
     } catch (err) {
       this.logError(`[FAIL] ${clientId.slice(0, 8)}...:`, err)
@@ -515,14 +645,9 @@ class WebConnector extends BaseConnector<WebSession> {
       })
       this.wsSend(clientId, { type: "done" })
     } finally {
-      await toolActivity.flush()
-      client.off("chunk", onChunk)
-      client.off("activity", toolActivity.handleActivity)
-      client.off("tool_activity", toolActivity.handleRevision)
-      client.off("image", onImage)
-      client.off("update", onUpdate)
-      client.off("permission_rejected", onPermission)
-      this.markQueryDone(clientId)
+      const session = this.sessionManager.get(clientId)
+      if (session) session.lastActivity = new Date()
+      this.markQueryDone(clientId, queryHandle)
     }
   }
 
@@ -672,7 +797,9 @@ async function main() {
   await connector.start()
 }
 
-main().catch((err) => {
-  console.error("Fatal error:", err)
-  process.exit(1)
-})
+if (import.meta.main) {
+  main().catch((err) => {
+    console.error("Fatal error:", err)
+    process.exit(1)
+  })
+}
